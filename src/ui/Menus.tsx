@@ -44,6 +44,8 @@ export function Menus({ snap, gameRef, onNew }: MenusProps) {
       <div className="overlay">
         <div className="panel">
           <h2>🔓 Signal Lock</h2>
+          {/* after a few misses the panel starts coaching — never a dead stop */}
+          {snap.puzzle.nudge && <p className="puzzle-nudge">💡 {snap.puzzle.nudge}</p>}
           {pz.kind === 'word' && (
             <>
               <p className="puzzle-body">{pz.scrambled}</p>
@@ -106,7 +108,9 @@ export function Menus({ snap, gameRef, onNew }: MenusProps) {
           )}
           {pz.kind === 'sequence' && (
             <>
-              <p className="hint">Repeat the pattern the radio hummed:</p>
+              <p className="hint">
+                The radio hummed a pattern. Tap the symbols in the order it played, left to right.
+              </p>
               <div className="seq-row">
                 {pz.shown.map((s, i) => (
                   <button
@@ -124,7 +128,7 @@ export function Menus({ snap, gameRef, onNew }: MenusProps) {
                   </button>
                 ))}
               </div>
-              <p className="seq-progress">{seqPick.map((i) => pz.shown[i]).join(' → ') || '—'}</p>
+              <p className="seq-progress">{seqPick.map((i) => pz.shown[i]).join(' → ') || '...'}</p>
               <button onClick={() => setSeqPick([])}>Clear</button>
             </>
           )}

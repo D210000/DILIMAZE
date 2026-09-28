@@ -54,10 +54,12 @@ interface OnboardingProps {
   initialSkin?: string
   /** shown once if a corrupt save was replaced */
   recovered?: boolean
+  /** shown once if an edited save failed its integrity check */
+  tampered?: boolean
   storageOk?: boolean
 }
 
-export function Onboarding({ onStart, initialSkin, recovered, storageOk }: OnboardingProps) {
+export function Onboarding({ onStart, initialSkin, recovered, tampered, storageOk }: OnboardingProps) {
   const [name, setName] = useState('')
   const [skin, setSkin] = useState(initialSkin ?? SKINS[0].id)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -83,7 +85,7 @@ export function Onboarding({ onStart, initialSkin, recovered, storageOk }: Onboa
         <div className="panel onboarding-panel">
           <h2>Create your runner</h2>
           <p className="hint">
-            Progress is saved on this device only — no account, no servers. You can reset it any time.
+            Progress is saved on this device only. No account, no servers. You can reset it any time.
           </p>
 
           <label className="field-label" htmlFor="runner-name">
@@ -109,10 +111,17 @@ export function Onboarding({ onStart, initialSkin, recovered, storageOk }: Onboa
             Start running
           </button>
 
-          {recovered && <p className="hint warn-line">A damaged save was found and replaced with a fresh one.</p>}
+          {tampered && (
+            <p className="hint warn-line">
+              That save had been edited by hand. Progress was reset to keep the run honest. Your name was kept.
+            </p>
+          )}
+          {recovered && !tampered && (
+            <p className="hint warn-line">A damaged save was found and replaced with a fresh one.</p>
+          )}
           {storageOk === false && (
             <p className="hint warn-line">
-              Local storage is unavailable — you can play, but progress will not persist.
+              Local storage is unavailable. You can play, but progress will not persist.
             </p>
           )}
         </div>

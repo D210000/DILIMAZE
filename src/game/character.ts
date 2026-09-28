@@ -183,8 +183,14 @@ function drawFromImage(ctx: CanvasRenderingContext2D, skin: Skin, o: CharacterDr
   ctx.scale(s * squashX, s * squashY)
   ctx.imageSmoothingEnabled = false // pixel art stays crisp
 
+  // rim light: a soft white glow around the silhouette so the hero reads on
+  // bright neon pavement just as well as in a dark alley
+  ctx.shadowColor = 'rgba(255, 255, 255, 0.85)'
+  ctx.shadowBlur = 6
+
   // body slab (the feet are drawn separately, on top)
   ctx.drawImage(source, 0, 0, natW, BODY_ROWS, -artW / 2, -artH + dip, artW, BODY_ROWS * k)
+  ctx.shadowBlur = 0 // eye glints stay crisp, not haloed
 
   // --- eyes: roll with the direction of travel and blink now and then -------
   // local +x is always "forward" (the facing flip handles mirroring), so the eyes
@@ -212,6 +218,7 @@ function drawFromImage(ctx: CanvasRenderingContext2D, skin: Skin, o: CharacterDr
   glint(38.5)
 
   // feet: lift and push alternately, always touching the floor otherwise
+  ctx.shadowBlur = 6 // the boots get the same rim so they don't melt into the road
   const foot = (box: { x: number; y: number; w: number; h: number }, step: number) => {
     const up = step > 0 ? -step * 3.4 : 0
     const push = step * 1.6

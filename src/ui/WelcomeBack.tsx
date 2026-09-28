@@ -45,7 +45,7 @@ export function WelcomeBack({
           Welcome back, <span className="neon-name">{profile.name}</span>
         </h1>
         <p className="tagline">
-          Resume at City {profile.bestCity} of 100 — {region.name}
+          Resume at City {profile.bestCity} of 100 in {region.name}
         </p>
 
         <div className="panel">
@@ -78,7 +78,7 @@ export function WelcomeBack({
 
           {run && (
             <p className="hint">
-              Saved mid-run: Day {run.day} in City {run.city} · hunger {Math.round(run.hunger)}% · thirst{' '}
+              Where you left off: Day {run.day} in City {run.city} · hunger {Math.round(run.hunger)}% · thirst{' '}
               {Math.round(run.thirst)}% · {run.coins} $DLI
             </p>
           )}
@@ -110,7 +110,7 @@ export function WelcomeBack({
             </div>
           )}
 
-          {!storageOk && <p className="hint warn-line">Local storage is blocked — this session will not be saved.</p>}
+          {!storageOk && <p className="hint warn-line">Local storage is blocked. This session will not be saved.</p>}
         </div>
       </div>
     </div>

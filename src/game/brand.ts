@@ -111,7 +111,7 @@ export const SKINS: Skin[] = [
   {
     id: 'dlicom-neon',
     name: 'Dlicom Neon',
-    blurb: 'Cyan-shifted patrol variant. Reads like a signal from the other side of the wire.',
+    blurb: 'Cyan shifted patrol variant. Reads like a signal from the other side of the wire.',
     image: MASCOT_ART,
     tint: '#28e6ff',
     suit: '#28e6ff',
@@ -141,7 +141,7 @@ export const SKINS: Skin[] = [
   {
     id: 'dlicom-sunset',
     name: 'Dlicom Sunset',
-    blurb: 'Copper-and-gold run. Loud enough to be seen, fast enough not to be caught.',
+    blurb: 'Copper and gold run. Loud enough to be seen, fast enough not to be caught.',
     image: MASCOT_ART,
     tint: '#ff8a3d',
     suit: '#ff6a3d',

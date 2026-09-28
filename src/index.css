@@ -30,19 +30,20 @@
   --font-display: 'Youre Gone', 'Segoe UI', system-ui, sans-serif;
   /* popup/dialog text face */
   --font-popup: 'The Bomb Sound', 'Segoe UI', system-ui, sans-serif;
-  --void: #05030b;
-  --bg: #08060f;
-  --panel: #120c1f;
-  --panel-2: #191030;
-  --magenta: #ff2fa0;
-  --magenta-soft: #ff8acb;
-  --cyan: #28e6ff;
-  --gold: #ffd24a;
-  --ink: #f6ecff;
-  --ink-dim: rgba(246, 236, 255, 0.62);
-  --good: #5cffb1;
-  --bad: #ff4d4d;
-  --warn: #ffa23a;
+  /* dusk-violet chrome: deep, glowing, but never unreadable */
+  --void: #151038;
+  --bg: #1d1650;
+  --panel: #2e2260;
+  --panel-2: #3b2c78;
+  --magenta: #ff4fb0;
+  --magenta-soft: #ff9bd4;
+  --cyan: #4fe8ff;
+  --gold: #ffdb6b;
+  --ink: #fbf6ff;
+  --ink-dim: rgba(245, 240, 255, 0.82);
+  --good: #6dffbe;
+  --bad: #ff6b6b;
+  --warn: #ffb35c;
 }
 
 * {
@@ -71,7 +72,7 @@ body,
   width: 100%;
   height: 100%;
   height: 100dvh; /* track mobile browser chrome (URL bar) */
-  background: radial-gradient(ellipse at 50% 0%, #1a0a26 0%, var(--bg) 55%, var(--void) 100%);
+  background: radial-gradient(ellipse at 50% 0%, #452066 0%, var(--bg) 55%, var(--void) 100%);
 }
 
 .game-canvas {
@@ -102,7 +103,7 @@ body,
   height: 55vmax;
   border-radius: 50%;
   filter: blur(70px);
-  opacity: 0.3;
+  opacity: 0.34;
 }
 
 .ambient-glow.one {
@@ -137,7 +138,7 @@ body,
   overflow-x: hidden;
   overflow-y: auto;
   padding: max(18px, env(safe-area-inset-top)) 16px max(18px, env(safe-area-inset-bottom));
-  background: radial-gradient(ellipse at 50% 0%, rgba(255, 47, 160, 0.12) 0%, transparent 60%), rgba(5, 3, 11, 0.94);
+  background: radial-gradient(ellipse at 50% 0%, rgba(255, 79, 176, 0.2) 0%, transparent 62%), rgba(21, 15, 50, 0.94);
   backdrop-filter: blur(3px);
 }
 
@@ -220,15 +221,15 @@ body,
 /* ---------- panels ---------- */
 
 .panel {
-  background: linear-gradient(180deg, rgba(30, 16, 54, 0.96), rgba(14, 8, 26, 0.96));
-  border: 1px solid rgba(255, 47, 160, 0.35);
+  background: linear-gradient(180deg, rgba(66, 46, 122, 0.97), rgba(38, 26, 82, 0.97));
+  border: 1px solid rgba(255, 79, 176, 0.45);
   border-radius: 14px;
   padding: 22px 24px;
   max-width: 520px;
   width: min(100%, 520px);
   margin: 0 auto;
   text-align: center;
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  box-shadow: 0 18px 60px rgba(12, 6, 32, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
 .onboarding-panel {
@@ -274,6 +275,20 @@ body,
   text-shadow: 0 0 12px rgba(40, 230, 255, 0.5);
 }
 
+/* coaching line after repeated wrong answers — nobody gets stuck on a riddle */
+.overlay .panel .puzzle-nudge,
+.puzzle-nudge {
+  font-family: var(--font-popup);
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--gold);
+  background: rgba(255, 219, 107, 0.12);
+  border: 1px dashed rgba(255, 219, 107, 0.55);
+  border-radius: 10px;
+  padding: 8px 12px;
+  margin: 4px 0 10px;
+}
+
 .lore-text {
   font-style: italic;
   color: #ffe8f6;
@@ -285,9 +300,9 @@ button {
   font-family: var(--font-display);
   letter-spacing: 1.5px;
   text-transform: uppercase;
-  background: linear-gradient(180deg, #2a1b46, #1b1130);
+  background: linear-gradient(180deg, #523a86, #392768);
   color: var(--ink);
-  border: 1px solid rgba(255, 47, 160, 0.35);
+  border: 1px solid rgba(255, 79, 176, 0.45);
   border-radius: 9px;
   padding: 9px 18px;
   font-size: 14px;
@@ -298,8 +313,8 @@ button {
 }
 
 button:hover:not(:disabled) {
-  background: linear-gradient(180deg, #3a2460, #241640);
-  box-shadow: 0 0 18px rgba(255, 47, 160, 0.35);
+  background: linear-gradient(180deg, #66499f, #452f7c);
+  box-shadow: 0 0 18px rgba(255, 79, 176, 0.45);
 }
 
 button:active:not(:disabled) {
@@ -312,12 +327,12 @@ button:disabled {
 }
 
 button.primary {
-  background: linear-gradient(180deg, var(--magenta), #a3136a);
-  border-color: #ff8acb;
+  background: linear-gradient(180deg, var(--magenta), #b8176f);
+  border-color: #ff9bd4;
   color: #fff;
   font-weight: 700;
   letter-spacing: 0.5px;
-  box-shadow: 0 0 22px rgba(255, 47, 160, 0.45);
+  box-shadow: 0 0 22px rgba(255, 79, 176, 0.5);
 }
 
 button.primary:hover:not(:disabled) {
@@ -388,8 +403,8 @@ button.wide {
   padding: 10px 12px;
   font-size: 16px; /* 16px+ stops iOS auto-zoom on focus */
   font-family: inherit;
-  background: #0c0718;
-  border: 1px solid rgba(255, 47, 160, 0.4);
+  background: #241a4e;
+  border: 1px solid rgba(255, 79, 176, 0.5);
   border-radius: 9px;
   color: var(--ink);
   text-align: center;
@@ -456,8 +471,8 @@ button.wide {
 }
 
 .stat-grid > div {
-  background: rgba(8, 5, 18, 0.8);
-  border: 1px solid rgba(40, 230, 255, 0.18);
+  background: rgba(34, 24, 70, 0.85);
+  border: 1px solid rgba(79, 232, 255, 0.32);
   border-radius: 9px;
   padding: 8px 6px;
   display: flex;
@@ -597,8 +612,8 @@ button.wide {
 }
 
 .city-node.fogged {
-  background: rgba(20, 14, 34, 0.75);
-  border-color: rgba(255, 255, 255, 0.06);
+  background: rgba(46, 34, 86, 0.8);
+  border-color: rgba(255, 255, 255, 0.14);
   color: transparent;
   position: relative;
   opacity: 0.85;
@@ -611,8 +626,8 @@ button.wide {
   position: absolute;
   inset: 30% 26%;
   border-radius: 2px;
-  background: rgba(255, 255, 255, 0.07);
-  box-shadow: -5px 3px 0 rgba(255, 255, 255, 0.05), 5px -2px 0 rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.18);
+  box-shadow: -5px 3px 0 rgba(255, 255, 255, 0.12), 5px -2px 0 rgba(255, 255, 255, 0.1);
 }
 
 .lore-box {
@@ -622,9 +637,9 @@ button.wide {
   text-align: left;
   font-size: 13px;
   line-height: 1.6;
-  background: rgba(6, 4, 14, 0.85);
-  border: 1px dashed rgba(255, 255, 255, 0.14);
-  color: rgba(180, 168, 210, 0.75);
+  background: rgba(28, 19, 60, 0.88);
+  border: 1px dashed rgba(255, 255, 255, 0.22);
+  color: rgba(216, 206, 244, 0.9);
 }
 
 .lore-box.unlocked {
@@ -669,6 +684,11 @@ button.wide {
   left: max(14px, env(safe-area-inset-left));
   text-shadow: 0 2px 6px rgba(0, 0, 0, 0.9);
   max-width: 52vw;
+  /* the world is bright now: a soft scrim keeps HUD text readable over it */
+  padding: 6px 11px;
+  border-radius: 11px;
+  background: linear-gradient(120deg, rgba(14, 9, 34, 0.68), rgba(14, 9, 34, 0.32));
+  backdrop-filter: blur(2px);
 }
 
 .hud-title {
@@ -684,7 +704,7 @@ button.wide {
 
 .hud-sub {
   font-size: 12px;
-  color: var(--ink-dim);
+  color: rgba(238, 231, 255, 0.92);
   margin-top: 2px;
 }
 
@@ -717,8 +737,8 @@ button.wide {
 .stat-bar {
   flex: 1;
   height: 8px;
-  background: rgba(4, 2, 10, 0.75);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(14, 9, 34, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.24);
   border-radius: 5px;
   overflow: hidden;
 }
@@ -752,9 +772,9 @@ button.wide {
   gap: 7px;
   padding: 5px 10px;
   border-radius: 999px;
-  background: rgba(8, 5, 18, 0.82);
-  border: 1px solid rgba(255, 210, 74, 0.35);
-  box-shadow: 0 0 18px rgba(255, 210, 74, 0.18);
+  background: rgba(30, 21, 64, 0.88);
+  border: 1px solid rgba(255, 219, 107, 0.45);
+  box-shadow: 0 0 18px rgba(255, 219, 107, 0.22);
   transition: opacity 0.4s;
 }
 
@@ -779,14 +799,18 @@ button.wide {
   bottom: max(14px, env(safe-area-inset-bottom));
   left: max(14px, env(safe-area-inset-left));
   font-size: 12.5px;
-  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.9);
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.95);
   max-width: 60vw;
+  padding: 7px 11px;
+  border-radius: 11px;
+  background: linear-gradient(120deg, rgba(14, 9, 34, 0.72), rgba(14, 9, 34, 0.4));
+  backdrop-filter: blur(2px);
 }
 
 .clues {
   font-size: 12.5px;
   line-height: 1.5;
-  color: var(--ink-dim);
+  color: rgba(240, 234, 255, 0.95);
 }
 
 .clue-count {
@@ -794,6 +818,80 @@ button.wide {
   font-size: 14px;
   letter-spacing: 1.5px;
   color: var(--cyan);
+}
+
+/* the locator line that travels with every clue */
+.clue-hint {
+  margin-top: 4px;
+  max-width: 44vw;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--gold);
+  text-shadow: 0 2px 6px rgba(12, 6, 32, 0.95);
+}
+
+/* proximity meter for clues the arrow does not point at */
+.signal {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(30, 21, 64, 0.88);
+  border: 1px solid rgba(79, 232, 255, 0.4);
+}
+
+.signal-label {
+  font-family: var(--font-display);
+  font-size: 11px;
+  letter-spacing: 1.4px;
+  color: var(--ink-dim);
+}
+
+.signal-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 10px;
+}
+
+.signal-bars i {
+  display: block;
+  width: 4px;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.signal-bars i:nth-child(1) {
+  height: 4px;
+}
+
+.signal-bars i:nth-child(2) {
+  height: 6px;
+}
+
+.signal-bars i:nth-child(3) {
+  height: 8px;
+}
+
+.signal-bars i:nth-child(4) {
+  height: 10px;
+}
+
+.signal-bars i.on {
+  background: var(--cyan);
+  box-shadow: 0 0 6px var(--cyan);
+}
+
+.signal-warm .signal-bars i.on {
+  background: var(--gold);
+  box-shadow: 0 0 6px var(--gold);
+}
+
+.signal-hot .signal-bars i.on {
+  background: var(--magenta);
+  box-shadow: 0 0 8px var(--magenta);
 }
 
 .pass-badge {
@@ -826,9 +924,9 @@ button.wide {
   bottom: 96px;
   left: 50%;
   transform: translateX(-50%);
-  background: rgba(8, 5, 18, 0.9);
-  border: 1px solid rgba(40, 230, 255, 0.45);
-  box-shadow: 0 0 20px rgba(40, 230, 255, 0.25);
+  background: rgba(30, 21, 64, 0.92);
+  border: 1px solid rgba(79, 232, 255, 0.55);
+  box-shadow: 0 0 20px rgba(79, 232, 255, 0.3);
   padding: 8px 16px;
   border-radius: 9px;
   font-size: 13px;
@@ -848,8 +946,9 @@ button.wide {
 }
 
 .toast {
-  background: rgba(8, 5, 18, 0.92);
+  background: rgba(34, 24, 70, 0.94);
   border-left: 3px solid var(--magenta);
+  box-shadow: 0 6px 20px rgba(12, 6, 32, 0.5);
   padding: 7px 14px;
   border-radius: 7px;
   font-size: 12.5px;
@@ -903,10 +1002,10 @@ button.wide {
 }
 
 .overlay .panel {
-  border: 1px solid rgba(255, 47, 160, 0.45);
+  border: 1px solid rgba(255, 79, 176, 0.5);
   border-radius: 16px;
-  box-shadow: 0 0 40px rgba(255, 47, 160, 0.18), 0 18px 60px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  background: linear-gradient(180deg, rgba(38, 20, 66, 0.98), rgba(16, 9, 30, 0.98));
+  box-shadow: 0 0 40px rgba(255, 79, 176, 0.24), 0 18px 60px rgba(12, 6, 32, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  background: linear-gradient(180deg, rgba(78, 50, 134, 0.98), rgba(42, 28, 88, 0.98));
   padding: 26px 30px;
   position: relative;
 }
@@ -969,7 +1068,7 @@ button.wide {
 .overlay {
   position: absolute;
   inset: 0;
-  background: rgba(4, 2, 10, 0.78);
+  background: rgba(20, 13, 46, 0.76);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -979,15 +1078,15 @@ button.wide {
 }
 
 .overlay.red {
-  background: rgba(52, 4, 12, 0.78);
+  background: rgba(78, 16, 30, 0.8);
 }
 
 .overlay.gold {
-  background: rgba(48, 30, 4, 0.7);
+  background: rgba(76, 50, 12, 0.74);
 }
 
 .overlay.lore {
-  background: rgba(14, 4, 30, 0.86);
+  background: rgba(38, 22, 76, 0.86);
 }
 
 .seq-row {
@@ -1109,6 +1208,20 @@ button.wide {
 
   .clues {
     font-size: 11px;
+  }
+
+  .clue-hint {
+    font-size: 10.5px;
+    max-width: 52vw;
+  }
+
+  .signal {
+    padding: 2px 8px;
+    gap: 5px;
+  }
+
+  .signal-label {
+    font-size: 9px;
   }
 
   .prompt {

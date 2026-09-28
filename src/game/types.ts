@@ -59,6 +59,8 @@ export interface Clue {
   x: number
   y: number
   riddle: string // points at the NEXT clue (or the gate once pass is granted)
+  /** plain-language locator for the same target, so hard cities stay findable */
+  hint: string
   puzzle: Puzzle | null
 }
 
@@ -107,6 +109,8 @@ export interface World {
   propAt: Map<number, Prop>
   spawn: Vec
   gate: { x: number; y: number }
+  /** locator for the very first clue — shown before the chain is readable */
+  entryHint: string
   clues: Clue[]
   guards: Guard[]
   region: Region
@@ -114,6 +118,8 @@ export interface World {
   drainPerHour: { hunger: number; thirst: number }
   freeFood: number
   freeWater: number
+  /** how many props the solvability pass had to downgrade (0 = clean generation) */
+  solvabilityFixes?: number
 }
 
 export interface PlayerState {

@@ -36,7 +36,7 @@ export interface Snapshot {
   cluesTotal: number
   promptText: string | null
   dialog: DialogData | null
-  puzzle: { puzzle: Puzzle; clueIndex: number } | null
+  puzzle: { puzzle: Puzzle; clueIndex: number; tries: number; nudge: string | null } | null
   toasts: Toast[]
   caughtTimer: number
   deathReason: string
@@ -51,8 +51,16 @@ export interface Snapshot {
   regionIndex: number
   /** true once the first clue of this city is found — unlocks readable clue text */
   clueKnown: boolean
-  /** riddle text for the clue the player is on */
+  /** riddle describing where the clue the player is hunting sits */
   clueHint: string
+  /** plain-language locator for that same clue — the anti-frustration line */
+  clueHintLine: string
+  /** locator for clue #1, shown while the chain text is still scrambled */
+  clueEntry: string
+  /** how close the player is to the next clue; null when it's already pinpointed */
+  signal: 'cold' | 'faint' | 'warm' | 'hot' | null
+  /** hint revealed after repeated wrong answers on the open puzzle */
+  puzzleNudge: string | null
   playerName: string
   /**
    * Signal tracker on the next clue. Only present in the first few cities and for
@@ -73,6 +81,37 @@ export interface GameOptions {
 /** how often mid-run state is flushed to the profile, in seconds */
 const AUTOSAVE_INTERVAL = 10
 
+/**
+ * Coaching for an open puzzle, based on how many times the player has missed.
+ * A riddle is never a hard blocker: three misses earns a genuine hint and five
+ * hands the answer over, so nobody is stuck on a quiz in the middle of a run.
+ */
+function puzzleNudge(puz: Puzzle, tries: number): string | null {
+  if (tries < 3) return null
+  const giveUp = tries >= 5
+  switch (puz.kind) {
+    case 'word': {
+      const first = puz.answer[0]
+      const last = puz.answer[puz.answer.length - 1]
+      return giveUp
+        ? `The word is ${puz.answer}. Type it in.`
+        : `${puz.answer.length} letters: starts with "${first}", ends with "${last}".`
+    }
+    case 'code':
+      return giveUp ? `The code is ${puz.answer}.` : 'Multiply first, then add the last number.'
+    case 'choice':
+      return giveUp
+        ? `The answer is "${puz.options[puz.answer] ?? ''}".`
+        : 'Read the story again. One of the options matches it.'
+    case 'sequence':
+      return giveUp
+        ? `Tap them in this order: ${puz.answer.map((i) => puz.shown[i]).join(' ')}`
+        : `Start with ${puz.shown[puz.answer[0]]}.`
+    default:
+      return null
+  }
+}
+
 export class Game {
   world: World
   player: PlayerState
@@ -83,7 +122,7 @@ export class Game {
   deaths: number
   totalDays: number
   dialog: DialogData | null = null
-  activePuzzle: { puzzle: Puzzle; clueIndex: number } | null = null
+  activePuzzle: { puzzle: Puzzle; clueIndex: number; tries: number; nudge: string | null } | null = null
   toasts: Toast[] = []
   private toastId = 1
   promptText: string | null = null
@@ -223,6 +262,15 @@ export class Game {
 
   // ---- loop -------------------------------------------------------------
 
+  /**
+   * Step the simulation by hand (clamped like a real frame). The render loop
+   * drives this via rAF; the dev self-test uses it to play whole cities without
+   * waiting in real time.
+   */
+  tick(dt: number) {
+    this.update(Math.max(0, Math.min(0.25, dt)))
+  }
+
   start() {
     this.lastFrame = performance.now()
     const frame = (t: number) => {
@@ -317,7 +365,7 @@ export class Game {
       this.daysInCity++
       this.totalDays++
       // sleeping was skipped: night caught you in the open
-      if (!this.player.hidden) this.toast('You slept rough — the night took its toll.', 'bad')
+      if (!this.player.hidden) this.toast('You slept rough. The night took its toll.', 'bad')
       this.checkpoint()
     }
 
@@ -615,7 +663,7 @@ export class Game {
       case 'house':
         return p.data === 'food' ? 'Ask for food (E)' : 'Ask for water (E)'
       case 'trash':
-        return 'Search trash (E) — risky'
+        return 'Search trash (E). Risky'
       case 'coin':
         return 'Pick up $DLI (E)'
       case 'board':
@@ -623,7 +671,7 @@ export class Game {
       case 'kid':
       case 'radio':
       case 'graffiti':
-        return p.data === 'clue' ? 'Investigate clue (E)' : 'Chat (E) — maybe gossip'
+        return p.data === 'clue' ? 'Investigate clue (E)' : 'Chat (E). Maybe gossip'
       case 'stall':
         return 'Market stall: food 6 $DLI / water 6 $DLI (E)'
       default:
@@ -680,7 +728,7 @@ export class Game {
           }
           prop.used = true
         } else {
-          this.toast('The door stayed shut — nobody home.', 'info')
+          this.toast('The door stayed shut. Nobody home.', 'info')
           // small chance of a guard alert
           if (this.rng.chance(0.25)) {
             for (const gd of this.world.guards) gd.alert = Math.min(1, gd.alert + 0.35)
@@ -738,8 +786,8 @@ export class Game {
       `They say City ${city + 1} is worse. If you make it there.`,
       'The border gate needs a pass. No pass, no exit.',
       'Water is free at the fountains. Food will cost you.',
-      'Sleep on benches — streets are dangerous at night.',
-      'I saw the courier. Ask the landmarks — boards, radios, kids. They know things.',
+      'Sleep on benches. Streets are dangerous at night.',
+      'I saw the courier. Ask the landmarks: boards, radios, kids. They know things.',
     ]
     const i = this.rng.int(0, lines.length - 1)
     this.dialog = { title: 'Local', lines: [lines[i]] }
@@ -759,7 +807,7 @@ export class Game {
       return
     }
     if (clue.puzzle) {
-      this.activePuzzle = { puzzle: clue.puzzle, clueIndex: idx }
+      this.activePuzzle = { puzzle: clue.puzzle, clueIndex: idx, tries: 0, nudge: null }
       this.status = 'puzzle'
       return
     }
@@ -770,6 +818,8 @@ export class Game {
     const clue = this.world.clues[idx]
     this.player.clueIndex = idx + 1
     if (this.profile) this.profile.stats.solves++
+    // the locator line rides along with every clue, so the trail never goes cold
+    const locator = clue.hint ? [`Hint: ${clue.hint.replace(/^Hint: /, '')}`] : []
     if (this.player.clueIndex >= this.world.clues.length) {
       this.player.hasPass = true
       this.toast('BORDER PASS acquired! Get to the east gate!', 'good')
@@ -777,32 +827,41 @@ export class Game {
         title: 'Border pass',
         lines: [
           clue.riddle,
-          '"Here — the stamp. The gate to the east will open for you. Go, before the shift changes."',
+          ...locator,
+          '"Here. The stamp. The gate to the east will open for you. Go, before the shift changes."',
         ],
       }
     } else {
       this.toast('Clue found! Follow the trail.', 'good')
-      this.dialog = { title: 'Clue', lines: [clue.riddle] }
+      this.dialog = { title: 'Clue', lines: [clue.riddle, ...locator] }
     }
     this.status = 'dialog'
   }
 
-  answerPuzzle(answer: string | number[]) {
+  answerPuzzle(answer: string | number | number[]) {
     const active = this.activePuzzle
     if (!active) return
     const puz = active.puzzle
     let ok = false
     if (puz.kind === 'word') ok = String(answer).trim().toUpperCase() === puz.answer
     else if (puz.kind === 'code') ok = String(answer).trim() === puz.answer
-    else if (puz.kind === 'choice') ok = (answer as unknown) === puz.answer
+    else if (puz.kind === 'choice') ok = answer === puz.answer
     else if (puz.kind === 'sequence') {
+      if (!Array.isArray(answer)) {
+        this.toast('Pick the symbols in order.', 'info')
+        return
+      }
       ok = (answer as number[]).length === puz.answer.length && (answer as number[]).every((v, i) => v === puz.answer[i])
     }
     if (ok) {
       this.activePuzzle = null
       this.grantClue(active.clueIndex)
     } else {
-      this.toast('Wrong! Think again...', 'bad')
+      // brute-forcing a riddle never gets the player stuck: after a few misses
+      // the panel starts coaching, and an outright giveaway comes with the rest
+      active.tries++
+      active.nudge = puzzleNudge(puz, active.tries)
+      this.toast(active.nudge ? 'Wrong. But here is a nudge...' : 'Wrong! Think again...', 'bad')
       this.status = 'puzzle'
     }
   }
@@ -990,7 +1049,7 @@ export class Game {
     if (silent) return
     this.toast(`${region.name}: all ${CITIES_PER_REGION} cities cleared. Lore unlocked.`, 'good')
     this.dialog = {
-      title: already ? `AGAIN — ${region.name}` : `REGION CLEARED — ${region.name}`,
+      title: already ? `AGAIN: ${region.name}` : `REGION CLEARED: ${region.name}`,
       lines: [region.lore],
     }
     this.status = 'dialog'
@@ -1061,7 +1120,7 @@ export class Game {
     this.saveAccum = 0
     this.checkpoint()
     this.toast(
-      `City ${next} — ${this.world.region.name}. ${next === 100 ? 'THE LAST CITY. Almost free!' : 'Find the clue trail.'}`,
+      `City ${next}: ${this.world.region.name}. ${next === 100 ? 'THE LAST CITY. Almost free!' : 'Find the clue trail.'}`,
       'info',
     )
     // a full region cleared: hand over its lore snippet
@@ -1122,10 +1181,49 @@ export class Game {
       regionId: this.world.region.id,
       regionIndex: regionIndexForCity(this.world.city),
       clueKnown: this.player.clueIndex > 0,
-      clueHint: this.world.clues[Math.min(this.player.clueIndex, this.world.clues.length - 1)]?.riddle ?? '',
+      // the riddle the player is working on is the one handed out with the clue
+      // they just found — clues[i].riddle points at clues[i + 1]
+      clueHint: this.currentClue()?.riddle ?? '',
+      clueHintLine: this.currentClue()?.hint ?? '',
+      clueEntry: this.world.entryHint,
+      signal: this.signal(),
+      puzzleNudge: this.activePuzzle?.nudge ?? null,
       playerName: this.profile?.name ?? 'Runner',
       clueTrack: this.clueTrack(),
     }
+  }
+
+  /**
+   * The clue being hunted right now: `clues[i].riddle` describes the target of
+   * `clues[i + 1]`, so after finding clue `i` the player needs `clues[i]` —
+   * i.e. the entry one step behind `clueIndex`. Once the pass is granted the
+   * final riddle (which points at the gate) is the one to show.
+   */
+  private currentClue() {
+    const clues = this.world.clues
+    if (!clues.length) return null
+    const i = this.player.clueIndex - 1
+    return clues[Math.max(0, Math.min(clues.length - 1, i))]
+  }
+
+  /**
+   * How warm the player is: a coarse proximity band to the next clue, so long
+   * unguided chains are still solvable by walking around. Only for clues the
+   * tracker arrow does NOT already pinpoint.
+   */
+  private signal(): Snapshot['signal'] {
+    if (this.player.hasPass) return null
+    const idx = this.player.clueIndex
+    if (clueAssist(this.world.city, idx)) return null
+    const clue = this.world.clues[idx]
+    if (!clue) return null
+    const prop = this.world.propAt.get(clue.propId)
+    if (!prop) return null
+    const d = Math.hypot(prop.x - this.player.x, prop.y - this.player.y) / TS
+    if (d < 3.5) return 'hot'
+    if (d < 10) return 'warm'
+    if (d < 20) return 'faint'
+    return 'cold'
   }
 
   /** direction + distance to the next clue — opening cities only, first two clues */

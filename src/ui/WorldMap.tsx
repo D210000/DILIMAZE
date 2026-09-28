@@ -79,7 +79,7 @@ export function WorldMap({ profile, onClose, onStartCity }: WorldMapProps) {
           </div>
 
           <p className="hint">
-            {clearedInRegion}/{CITIES_PER_REGION} cities cleared here. Tap any lit city to replay it — fogged ones stay
+            {clearedInRegion}/{CITIES_PER_REGION} cities cleared here. Tap any lit city to replay it. Fogged ones stay
             locked until you reach them.
           </p>
 

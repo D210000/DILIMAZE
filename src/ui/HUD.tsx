@@ -4,6 +4,20 @@ import { GlitchText } from './GlitchText'
 
 const C = BRAND.colors
 
+/** proximity readout for clues the tracker arrow does not pinpoint */
+const SIGNAL_LABEL: Record<NonNullable<Snapshot['signal']>, string> = {
+  cold: 'COLD',
+  faint: 'FAINT',
+  warm: 'WARM',
+  hot: 'HOT',
+}
+const SIGNAL_LEVEL: Record<NonNullable<Snapshot['signal']>, number> = {
+  cold: 1,
+  faint: 2,
+  warm: 3,
+  hot: 4,
+}
+
 export function HUD({ snap }: { snap: Snapshot }) {
   const bar = (label: string, v: number, color: string) => (
     <div className="stat">
@@ -59,13 +73,26 @@ export function HUD({ snap }: { snap: Snapshot }) {
             CLUES {snap.cluesFound}/{snap.cluesTotal}
           </span>{' '}
           {snap.hasPass ? (
-            <span className="pass-badge">BORDER PASS — RUN EAST</span>
-          ) : snap.clueKnown ? (
-            <GlitchText text={snap.clueHint} locked={false} />
+            <span className="pass-badge">BORDER PASS: RUN EAST</span>
           ) : (
-            <GlitchText text={snap.clueHint || 'SIGNAL UNRESOLVED — FIND THE FIRST LANDMARK'} locked={true} />
+            <GlitchText text={snap.clueHint || 'SIGNAL UNRESOLVED'} locked={!snap.clueKnown} />
           )}
         </div>
+        {/* the locator line: before the first clue it points at the opening
+            landmark, after that it travels with every riddle */}
+        {!snap.hasPass && (snap.clueKnown ? snap.clueHintLine : snap.clueEntry) && (
+          <div className="clue-hint">{snap.clueKnown ? snap.clueHintLine : snap.clueEntry}</div>
+        )}
+        {snap.signal && !snap.hasPass && (
+          <div className={`signal signal-${snap.signal}`}>
+            <span className="signal-label">SIGNAL {SIGNAL_LABEL[snap.signal]}</span>
+            <span className="signal-bars" aria-hidden="true">
+              {[0, 1, 2, 3].map((i) => (
+                <i key={i} className={i < SIGNAL_LEVEL[snap.signal!] ? 'on' : ''} />
+              ))}
+            </span>
+          </div>
+        )}
         {snap.guardsAlerted > 0 && <div className="alert-badge">🚨 CHASED BY {snap.guardsAlerted} GUARD(S)!</div>}
         {snap.nearSafehouse && !snap.hasPass && <div className="safe-badge">🛏 Safe to sleep (T)</div>}
       </div>

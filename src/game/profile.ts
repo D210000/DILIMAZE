@@ -1,15 +1,36 @@
 import { DEFAULT_SKIN_ID, SKINS } from './brand'
+import { REGIONS } from './city'
 
 /**
  * Profile + save system. localStorage only, no backend.
- * Every storage access is wrapped in try/catch; if storage is missing or the
- * payload is corrupt we fall back to a fresh in-memory profile so the game
- * always runs (it just won't persist).
+ *
+ * Hardening rules (see the audit notes in README):
+ *  - every storage touch is wrapped in try/catch; missing or blocked storage
+ *    falls back to a fresh in-memory profile so the game always runs;
+ *  - the payload is size-capped before parsing, so a bloated value can't hang
+ *    the tab;
+ *  - the saved object carries a fingerprint. It is NOT tamper-proof (the salt
+ *    ships in the bundle and any played-out state is reproducible client-side),
+ *    but hand-editing the save in devtools is detected and the progress reset;
+ *  - unknown keys are never copied through, so a crafted payload cannot pollute
+ *    Object.prototype or smuggle extra state into the profile;
+ *  - the display name is sanitized (no control / bidi-override characters).
  */
 
 export const PROFILE_KEY = 'borderrun_profile'
 /** old pre-profile save key, migrated into the profile on first load */
 const LEGACY_KEY = 'border-run-save-v1'
+
+/** refuse to JSON.parse anything bigger than this (DoS guard) */
+const MAX_SAVE_CHARS = 64 * 1024
+
+/**
+ * Bump when the fingerprint inputs change. Saves written by an older
+ * fingerprint are treated as legacy (accepted and re-signed) rather than
+ * tampered, so future format changes never wipe real progress.
+ */
+const SIG_VERSION = 1
+const SIG_SALT = 'dilimaze.cities.v1'
 
 export interface RunState {
   city: number
@@ -53,6 +74,11 @@ export interface Profile {
   onboarded: boolean
   /** set when a corrupt save was replaced — the UI mentions it once */
   corruptRecovered?: boolean
+  /** set when an edited save failed its integrity check */
+  tamperRecovered?: boolean
+  /** fingerprint of this payload + the fingerprint format that produced it */
+  sig?: string
+  sigv?: number
 }
 
 export const PROFILE_VERSION = 1
@@ -81,8 +107,36 @@ function clampNum(v: unknown, min: number, max: number, dflt: number): number {
   return Math.min(max, Math.max(min, n))
 }
 
-function str(v: unknown, dflt: string): string {
-  return typeof v === 'string' && v.trim() ? v.trim().slice(0, 18) : dflt
+function int(v: unknown, min: number, max: number, dflt: number): number {
+  return Math.round(clampNum(v, min, max, dflt))
+}
+
+/**
+ * Display names are rendered as text (React escapes them, and canvas fillText
+ * is inert), but control characters and Unicode bidi overrides could still
+ * scramble or spoof the UI. Strip them, cap the length.
+ */
+function cleanName(v: unknown, dflt: string): string {
+  if (typeof v !== 'string') return dflt
+  const cleaned = v
+    // control chars, zero-width joiners, bidi overrides, BOM
+    .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, '')
+    .replace(/[<>]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 18)
+  return cleaned.length ? cleaned : dflt
+}
+
+const REGION_IDS = REGIONS.map((r) => r.id)
+
+/** only known region ids survive, so no key from a payload is ever trusted */
+function cleanLore(raw: unknown): Record<string, boolean> {
+  const out: Record<string, boolean> = {}
+  if (!raw || typeof raw !== 'object') return out
+  const src = raw as Record<string, unknown>
+  for (const id of REGION_IDS) if (src[id] === true) out[id] = true
+  return out
 }
 
 export function freshRun(city = 1): RunState {
@@ -93,7 +147,7 @@ export function freshProfile(name = 'Runner', skin = DEFAULT_SKIN_ID): Profile {
   const now = Date.now()
   return {
     version: PROFILE_VERSION,
-    name,
+    name: cleanName(name, 'Runner'),
     skin: SKINS.some((s) => s.id === skin) ? skin : DEFAULT_SKIN_ID,
     createdAt: now,
     updatedAt: now,
@@ -106,51 +160,154 @@ export function freshProfile(name = 'Runner', skin = DEFAULT_SKIN_ID): Profile {
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* integrity fingerprint                                               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * FNV-1a over a canonical, key-ordered projection of the save. Deterministic
+ * across save/load, and cheap enough to run on every autosave.
+ */
+function fingerprint(p: Profile): string {
+  const canon = [
+    p.version,
+    p.name,
+    p.skin,
+    Math.round(p.createdAt),
+    p.bestCity,
+    p.run
+      ? [
+          p.run.city,
+          p.run.day,
+          p.run.daysInCity,
+          Math.round(p.run.hunger),
+          Math.round(p.run.thirst),
+          Math.round(p.run.health),
+          p.run.coins,
+          p.run.food,
+          p.run.water,
+          p.run.clueIndex,
+        ].join(',')
+      : '-',
+    [
+      p.stats.attempts,
+      p.stats.solves,
+      p.stats.deaths,
+      p.stats.citiesCleared,
+      Math.round(p.stats.timePlayedSec),
+    ].join(','),
+    p.settings.sound ? 1 : 0,
+    Object.keys(p.lore).filter((k) => p.lore[k] === true).sort().join('+'),
+    p.onboarded ? 1 : 0,
+  ].join('|')
+
+  const s = `${SIG_SALT}|${canon}`
+  let h = 0x811c9dc5
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return h.toString(36)
+}
+
+/** clamp/round every field the fingerprint covers, so save and load agree */
+function normalize(p: Profile): Profile {
+  p.version = PROFILE_VERSION
+  p.name = cleanName(p.name, 'Runner')
+  if (!SKINS.some((s) => s.id === p.skin)) p.skin = DEFAULT_SKIN_ID
+  p.createdAt = int(p.createdAt, 0, Number.MAX_SAFE_INTEGER, Date.now())
+  p.bestCity = int(p.bestCity, 1, 100, 1)
+  p.stats = {
+    attempts: int(p.stats.attempts, 0, 1e7, 0),
+    solves: int(p.stats.solves, 0, 1e7, 0),
+    deaths: int(p.stats.deaths, 0, 1e7, 0),
+    citiesCleared: int(p.stats.citiesCleared, 0, 1e7, 0),
+    timePlayedSec: Math.max(0, Number.isFinite(p.stats.timePlayedSec) ? p.stats.timePlayedSec : 0),
+  }
+  p.settings = { sound: p.settings.sound !== false }
+  p.lore = cleanLore(p.lore)
+  p.onboarded = p.onboarded === true
+  // structural repair, never destructive: a resumable run must belong to a city
+  // already reached. (Progress is only ever wiped by an exact fingerprint
+  // mismatch below — heuristics must never delete a real player's save.)
+  if (p.run && typeof p.run === 'object' && int(p.run.city, 1, 100, 1) > p.bestCity) p.run = null
+  if (p.run && typeof p.run === 'object') {
+    p.run = {
+      city: int(p.run.city, 1, 100, 1),
+      day: int(p.run.day, 1, 9999, 1),
+      daysInCity: int(p.run.daysInCity, 1, 9999, 1),
+      hunger: clampNum(p.run.hunger, 0, 100, 100),
+      thirst: clampNum(p.run.thirst, 0, 100, 100),
+      health: clampNum(p.run.health, 0, 100, 100),
+      coins: int(p.run.coins, 0, 99999, 10),
+      food: int(p.run.food, 0, 99, 1),
+      water: int(p.run.water, 0, 99, 1),
+      clueIndex: int(p.run.clueIndex, 0, 9, 0),
+    }
+  } else {
+    p.run = null
+  }
+  return p
+}
+
+/* ------------------------------------------------------------------ */
+/* load / save                                                         */
+/* ------------------------------------------------------------------ */
+
 /** Coerce anything we pulled out of storage into a valid Profile. */
 function sanitize(raw: unknown): Profile | null {
-  if (!raw || typeof raw !== 'object') return null
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
   const d = raw as Record<string, unknown>
   const base = freshProfile()
   const stats = (d.stats ?? {}) as Record<string, unknown>
   const settings = (d.settings ?? {}) as Record<string, unknown>
-  const run = d.run as Record<string, unknown> | null | undefined
-  const loreRaw = (d.lore ?? {}) as Record<string, unknown>
-  const lore: Record<string, boolean> = {}
-  for (const [k, v] of Object.entries(loreRaw)) if (v === true) lore[k] = true
+  const runRaw = d.run
+  const run = runRaw && typeof runRaw === 'object' ? (runRaw as Record<string, unknown>) : null
+  const lore = cleanLore(d.lore)
 
-  const p: Profile = {
+  const p: Profile = normalize({
     version: PROFILE_VERSION,
-    name: str(d.name, base.name),
-    skin: str(d.skin, DEFAULT_SKIN_ID),
+    name: cleanName(d.name, base.name),
+    skin: typeof d.skin === 'string' ? d.skin : DEFAULT_SKIN_ID,
     createdAt: clampNum(d.createdAt, 0, Number.MAX_SAFE_INTEGER, Date.now()),
     updatedAt: clampNum(d.updatedAt, 0, Number.MAX_SAFE_INTEGER, Date.now()),
-    bestCity: Math.round(clampNum(d.bestCity, 1, 100, 1)),
-    run: null,
+    bestCity: clampNum(d.bestCity, 1, 100, 1),
+    run: run
+      ? {
+          city: clampNum(run.city, 1, 100, 1),
+          day: clampNum(run.day, 1, 9999, 1),
+          daysInCity: clampNum(run.daysInCity, 1, 9999, 1),
+          hunger: clampNum(run.hunger, 0, 100, 100),
+          thirst: clampNum(run.thirst, 0, 100, 100),
+          health: clampNum(run.health, 0, 100, 100),
+          coins: clampNum(run.coins, 0, 99999, 10),
+          food: clampNum(run.food, 0, 99, 1),
+          water: clampNum(run.water, 0, 99, 1),
+          clueIndex: clampNum(run.clueIndex, 0, 9, 0),
+        }
+      : null,
     stats: {
-      attempts: Math.round(clampNum(stats.attempts, 0, 1e7, 0)),
-      solves: Math.round(clampNum(stats.solves, 0, 1e7, 0)),
-      deaths: Math.round(clampNum(stats.deaths, 0, 1e7, 0)),
-      citiesCleared: Math.round(clampNum(stats.citiesCleared, 0, 1e7, 0)),
-      timePlayedSec: Math.round(clampNum(stats.timePlayedSec, 0, 1e9, 0)),
+      attempts: clampNum(stats.attempts, 0, 1e7, 0),
+      solves: clampNum(stats.solves, 0, 1e7, 0),
+      deaths: clampNum(stats.deaths, 0, 1e7, 0),
+      citiesCleared: clampNum(stats.citiesCleared, 0, 1e7, 0),
+      timePlayedSec: clampNum(stats.timePlayedSec, 0, 1e9, 0),
     },
     settings: { sound: settings.sound !== false },
     lore,
     onboarded: d.onboarded === true,
-  }
-  if (!SKINS.some((s) => s.id === p.skin)) p.skin = DEFAULT_SKIN_ID
-  if (run && typeof run === 'object') {
-    p.run = {
-      city: Math.round(clampNum(run.city, 1, 100, 1)),
-      day: Math.round(clampNum(run.day, 1, 9999, 1)),
-      daysInCity: Math.round(clampNum(run.daysInCity, 1, 9999, 1)),
-      hunger: clampNum(run.hunger, 0, 100, 100),
-      thirst: clampNum(run.thirst, 0, 100, 100),
-      health: clampNum(run.health, 0, 100, 100),
-      coins: Math.round(clampNum(run.coins, 0, 99999, 10)),
-      food: Math.round(clampNum(run.food, 0, 99, 1)),
-      water: Math.round(clampNum(run.water, 0, 99, 1)),
-      clueIndex: Math.round(clampNum(run.clueIndex, 0, 9, 0)),
-    }
+  })
+
+  // integrity: the one and only destructive path. A present, current-generation
+  // fingerprint that does not match the payload can only mean the save was
+  // edited by hand — a real save is written by saveProfile(), which signs it.
+  const sig = typeof d.sig === 'string' ? d.sig : null
+  const sigv = int(d.sigv, 0, 1e6, 0)
+  if (sig && sigv === SIG_VERSION && fingerprint(p) !== sig) {
+    const wiped = freshProfile(p.name)
+    wiped.createdAt = p.createdAt
+    wiped.tamperRecovered = true
+    return normalize(wiped)
   }
   return p
 }
@@ -158,24 +315,49 @@ function sanitize(raw: unknown): Profile | null {
 export function loadProfile(): Profile | null {
   const s = storage()
   if (!s) return memoryFallback
+  let raw: string | null = null
   try {
-    const raw = s.getItem(PROFILE_KEY)
-    if (raw) {
+    raw = s.getItem(PROFILE_KEY)
+  } catch {
+    return memoryFallback
+  }
+
+  if (raw) {
+    if (raw.length > MAX_SAVE_CHARS) {
+      // drop the bloated value so every later boot starts clean
+      try {
+        s.removeItem(PROFILE_KEY)
+      } catch {
+        /* ignore */
+      }
+      const oversized = freshProfile()
+      oversized.corruptRecovered = true
+      return oversized
+    }
+    try {
       const parsed = sanitize(JSON.parse(raw))
       if (parsed) return parsed
       // corrupt payload: keep the name if we can, otherwise start clean
-      const nameGuess = /"name"\s*:\s*"([^"]{1,18})"/.exec(raw)?.[1]
+      const nameGuess = /"name"\s*:\s*"([^"\\]{1,18})"/.exec(raw)?.[1]
+      const rescued = freshProfile(nameGuess || 'Runner')
+      rescued.corruptRecovered = true
+      return rescued
+    } catch {
+      const nameGuess = /"name"\s*:\s*"([^"\\]{1,18})"/.exec(raw)?.[1]
       const rescued = freshProfile(nameGuess || 'Runner')
       rescued.corruptRecovered = true
       return rescued
     }
-    // one-time migration of the pre-profile save
+  }
+
+  // one-time migration of the pre-profile save
+  try {
     const legacyRaw = s.getItem(LEGACY_KEY)
-    if (legacyRaw) {
+    if (legacyRaw && legacyRaw.length < MAX_SAVE_CHARS) {
       const legacy = JSON.parse(legacyRaw) as { city?: number }
       if (typeof legacy.city === 'number') {
         const p = freshProfile()
-        p.bestCity = Math.round(clampNum(legacy.city, 1, 100, 1))
+        p.bestCity = int(legacy.city, 1, 100, 1)
         p.run = freshRun(p.bestCity)
         p.onboarded = false
         s.removeItem(LEGACY_KEY)
@@ -183,14 +365,16 @@ export function loadProfile(): Profile | null {
       }
     }
   } catch {
-    return memoryFallback
+    /* unreadable legacy save: ignore it */
   }
   return null
 }
 
 export function saveProfile(p: Profile): boolean {
   p.updatedAt = Date.now()
-  p.version = PROFILE_VERSION
+  normalize(p)
+  p.sigv = SIG_VERSION
+  p.sig = fingerprint(p)
   const s = storage()
   if (!s) {
     memoryFallback = p

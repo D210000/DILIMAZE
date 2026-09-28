@@ -22,17 +22,36 @@ export default function App() {
   const [, setTick] = useState(0)
   const [screen, setScreen] = useState<Screen>('booting')
   const [profile, setProfile] = useState<Profile | null>(null)
-  const [recovered] = useState(() => loadProfile()?.corruptRecovered === true)
+  /** the save is read exactly once, at mount */
+  const [boot] = useState(() => (ENGINE_READY ? loadProfile() : null))
+  const [recovered] = useState(() => boot?.corruptRecovered === true)
+  const [tampered] = useState(() => boot?.tamperRecovered === true)
   const [storageOk] = useState(() => (ENGINE_READY ? storageAvailable() : false))
 
   /* ---------------- boot: load or start a profile ---------------- */
 
   useEffect(() => {
     if (!ENGINE_READY) return
-    const p = loadProfile()
-    profileRef.current = p
-    setProfile(p ? { ...p } : null)
-    setScreen(p?.onboarded ? 'welcome' : 'onboarding')
+    profileRef.current = boot
+    setProfile(boot ? { ...boot } : null)
+    setScreen(boot?.onboarded ? 'welcome' : 'onboarding')
+  }, [boot])
+
+  /* ---------------- dev-only tooling ---------------- */
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    let cancelled = false
+    // the self-test module is only ever fetched by a dev build, so it is
+    // tree-shaken out of the shipped bundle along with the console handle
+    import('./devtools/selftest')
+      .then((m) => {
+        if (!cancelled) (window as unknown as { __dilimaze?: unknown }).__dilimaze = m
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   /** mutate the live profile, persist it, and refresh the UI copy */
@@ -133,7 +152,10 @@ export default function App() {
   const mountGame = useCallback(
     (g: Game) => {
       unsubscribe.current?.()
-      ;(window as unknown as { game?: Game }).game = g
+      // Dev builds expose the engine for the console and preview tooling. A
+      // production build deliberately has NO global that can hand out a pass,
+      // grant clues or edit the run — see the audit notes in the README.
+      if (import.meta.env.DEV) (window as unknown as { game?: Game }).game = g
       gameRef.current = g
       g.start()
       unsubscribe.current = g.subscribe(() => setTick((t) => t + 1))
@@ -189,6 +211,7 @@ export default function App() {
       {screen === 'onboarding' && (
         <Onboarding
           recovered={recovered}
+          tampered={tampered}
           storageOk={storageOk}
           initialSkin={profile?.skin}
           onStart={(name, skin) => {
