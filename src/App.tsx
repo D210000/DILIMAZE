@@ -2,15 +2,19 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { BRAND } from './game/brand'
 import { Game } from './game/engine'
 import { freshProfile, loadProfile, resetProfile, saveProfile, storageAvailable, type Profile } from './game/profile'
+import { clearRecords } from './game/records'
 import { render } from './game/render'
+import { HowToPlay } from './ui/HowToPlay'
 import { HUD } from './ui/HUD'
+import { MainMenu } from './ui/MainMenu'
 import { Menus } from './ui/Menus'
 import { Onboarding } from './ui/Onboarding'
+import { Ranking } from './ui/Ranking'
+import { Settings } from './ui/Settings'
 import { TouchControls } from './ui/TouchControls'
-import { WelcomeBack } from './ui/WelcomeBack'
 import { WorldMap } from './ui/WorldMap'
 
-type Screen = 'booting' | 'onboarding' | 'welcome' | 'map' | 'game'
+type Screen = 'booting' | 'onboarding' | 'menu' | 'settings' | 'howto' | 'ranking' | 'map' | 'game'
 
 const ENGINE_READY = typeof window !== 'undefined'
 
@@ -21,6 +25,8 @@ export default function App() {
   const profileRef = useRef<Profile | null>(null)
   const [, setTick] = useState(0)
   const [screen, setScreen] = useState<Screen>('booting')
+  /** true when the menu is reached straight from creating a runner this session */
+  const [freshRunner, setFreshRunner] = useState(false)
   const [profile, setProfile] = useState<Profile | null>(null)
   /** the save is read exactly once, at mount */
   const [boot] = useState(() => (ENGINE_READY ? loadProfile() : null))
@@ -34,7 +40,7 @@ export default function App() {
     if (!ENGINE_READY) return
     profileRef.current = boot
     setProfile(boot ? { ...boot } : null)
-    setScreen(boot?.onboarded ? 'welcome' : 'onboarding')
+    setScreen(boot?.onboarded ? 'menu' : 'onboarding')
   }, [boot])
 
   /* ---------------- dev-only tooling ---------------- */
@@ -172,6 +178,8 @@ export default function App() {
       const resume = !fresh && prof.run && prof.run.city === target ? prof.run : null
       const g = new Game(target, prof.stats.deaths, 0, { skinId: prof.skin, profile: prof, resume })
       mountGame(g)
+      // the greet is a one time thing: from here on the menu says welcome back
+      setFreshRunner(false)
       setScreen('game')
     },
     [mountGame],
@@ -184,7 +192,7 @@ export default function App() {
     gameRef.current = null
     const live = profileRef.current
     setProfile(live ? { ...live } : null)
-    setScreen('welcome')
+    setScreen('menu')
   }, [])
 
   const snap = gameRef.current?.getSnapshot()
@@ -228,32 +236,53 @@ export default function App() {
             }
             profileRef.current = p
             persist({})
-            launch(1, true)
+            // the runner is created, but the run itself now starts from the menu
+            setFreshRunner(true)
+            setScreen('menu')
           }}
         />
       )}
 
-      {screen === 'welcome' && profile && (
-        <WelcomeBack
+      {screen === 'menu' && profile && (
+        <MainMenu
           profile={profile}
           storageOk={storageOk}
-          onContinue={() => launch(profile.run?.city ?? profile.bestCity, false)}
+          fresh={freshRunner}
+          onPlay={() => launch(profile.run?.city ?? profile.bestCity, false)}
+          onNewRun={() => launch(1, true)}
           onOpenMap={() => setScreen('map')}
-          onNewRun={() => launch(profile.bestCity, true)}
+          onSettings={() => setScreen('settings')}
+          onHowToPlay={() => setScreen('howto')}
+          onRanking={() => setScreen('ranking')}
+        />
+      )}
+
+      {screen === 'settings' && profile && (
+        <Settings
+          profile={profile}
+          storageOk={storageOk}
+          onRename={(name) => persist({ name })}
           onChangeSkin={(skin) => persist({ skin })}
+          onBack={() => setScreen('menu')}
           onReset={() => {
             resetProfile()
+            clearRecords()
             profileRef.current = null
             setProfile(null)
+            setFreshRunner(false)
             setScreen('onboarding')
           }}
         />
       )}
 
+      {screen === 'howto' && <HowToPlay onBack={() => setScreen('menu')} />}
+
+      {screen === 'ranking' && profile && <Ranking profile={profile} onBack={() => setScreen('menu')} />}
+
       {screen === 'map' && profile && (
         <WorldMap
           profile={profile}
-          onClose={() => setScreen('welcome')}
+          onClose={() => setScreen('menu')}
           onStartCity={(city) => launch(city, false)}
         />
       )}

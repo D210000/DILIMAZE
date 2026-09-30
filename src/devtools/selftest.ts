@@ -24,8 +24,9 @@ import {
   generateCity,
   mapSize,
 } from '../game/city'
-import { Game } from '../game/engine'
+import { Game, dayHour, dayLight } from '../game/engine'
 import { PROFILE_KEY, freshProfile, loadProfile, saveProfile, storageAvailable } from '../game/profile'
+import { RECORDS_KEY, clearRecords, fmtClock, loadRecords, recordCityTime, recordRun } from '../game/records'
 import { render } from '../game/render'
 import type { CharacterPose, Puzzle, World } from '../game/types'
 
@@ -175,6 +176,9 @@ function generationTests(s: Suite): void {
   let puzzleDetail = ''
   let guardOk = true
   let guardDetail = ''
+  let chainRepeat = ''
+  const riddleLines = new Set<string>()
+  let clueLines = 0
   let fixes = 0
   const worstCities: string[] = []
 
@@ -218,7 +222,14 @@ function generationTests(s: Suite): void {
         puzzleOk = false
         puzzleDetail ||= `city ${city}: ${c.puzzle.kind}`
       }
-    }      if (!w.entryHint) {
+    }
+    // a chain should read as a chain, not as the same line handed out twice
+    const chainLines = new Set(w.clues.map((c) => c.riddle))
+    if (chainLines.size !== w.clues.length)
+      chainRepeat ||= `city ${city}: ${w.clues.length - chainLines.size} repeated line(s)`
+    for (const line of chainLines) riddleLines.add(line)
+    clueLines += w.clues.length
+    if (!w.entryHint) {
       hintOk = false
       hintDetail ||= `city ${city}: no entry hint`
     }
@@ -242,6 +253,36 @@ function generationTests(s: Suite): void {
   s.check('every clue points at a real, unique landmark prop', propOk, propDetail || '100 cities clean')
   s.check('every clue carries both a riddle and a locator hint', hintOk, hintDetail || '100 cities clean')
   s.check('every puzzle is internally solvable', puzzleOk, puzzleDetail || 'all answers consistent')
+  s.check(
+    'no city hands out the same riddle twice in one chain',
+    chainRepeat === '',
+    chainRepeat || 'all 100 chains read as 100 different lines',
+  )
+  s.check(
+    'riddle wording moves on from city to city',
+    riddleLines.size >= clueLines * 0.6,
+    `${riddleLines.size} distinct lines across ${clueLines} clues`,
+  )
+  let shared = ''
+  for (let i = 1; i < worlds.length && !shared; i++) {
+    const before = new Set(worlds[i - 1].clues.map((c) => c.riddle))
+    const clash = worlds[i].clues.find((c) => before.has(c.riddle))
+    if (clash) shared = `city ${i} and city ${i + 1} both say "${clash.riddle.slice(0, 48)}..."`
+  }
+  s.check(
+    'two cities in a row never hand out the same riddle',
+    shared === '',
+    shared || `${riddleLines.size} lines, none shared by neighbours`,
+  )
+  let hints = ''
+  const hintLines = new Set<string>()
+  for (const w of worlds) for (const c of w.clues) hintLines.add(c.hint)
+  for (const w of worlds) if (new Set(w.clues.map((c) => c.hint)).size !== w.clues.length) hints ||= `city ${w.city} repeats a hint`
+  s.check(
+    'locator hints are reworded as well',
+    hints === '' && hintLines.size >= clueLines * 0.6,
+    hints || `${hintLines.size} distinct locator lines across ${clueLines} clues`,
+  )
   s.check(
     'every city has guards and somewhere to hide from them',
     guardOk,
@@ -598,7 +639,9 @@ function renderTests(s: Suite): void {
     threw || '6 cities × 6 poses × 3 times of day',
   )
 
-  // brightness, measured once per region: the whole point of the palette pass
+  // brightness, measured once per region: the whole point of the palette pass.
+  // A city opens around 06:00 (frac 0) so "day" is sampled at midday and
+  // "night" at frac 0.8, deep in the dark part of the arc.
   ctx.setTransform(1, 0, 0, 1, 0, 0)
   const perRegion: Array<{ region: string; day: number; night: number }> = []
   for (const city of [1, 21, 41, 61, 81]) {
@@ -606,7 +649,7 @@ function renderTests(s: Suite): void {
     g.timeSec = g.world.dayLengthSec * 0.45
     render(ctx, g, canvas.width, canvas.height)
     const day = meanLuminance(ctx, canvas.width, canvas.height)
-    g.timeSec = 0
+    g.timeSec = g.world.dayLengthSec * 0.8
     render(ctx, g, canvas.width, canvas.height)
     const night = meanLuminance(ctx, canvas.width, canvas.height)
     perRegion.push({ region: g.world.region.name, day, night })
@@ -627,6 +670,36 @@ function renderTests(s: Suite): void {
     perRegion.every((r) => r.night < r.day),
     'all five regions',
   )
+
+  // the day arc: a city must open in bright sun and darken as play continues
+  {
+    const g = new Game(1, 0, 0, { profile: freshProfile('Arc') })
+    const lumAt = (frac: number) => {
+      g.timeSec = g.world.dayLengthSec * frac
+      render(ctx, g, canvas.width, canvas.height)
+      return meanLuminance(ctx, canvas.width, canvas.height)
+    }
+    const sunrise = lumAt(0)
+    const noon = lumAt(0.35)
+    const dusk = lumAt(0.68)
+    const deep = lumAt(0.8)
+    const preDawn = lumAt(0.98)
+    s.check(
+      'a city opens in full sun and darkens as the day runs on',
+      sunrise >= 80 && noon >= 80 && dusk < noon && deep < dusk,
+      `06:00 ${sunrise.toFixed(0)} · noon ${noon.toFixed(0)} · dusk ${dusk.toFixed(0)} · night ${deep.toFixed(0)}`,
+    )
+    s.check(
+      'the light comes back before the next sunrise so the loop has no hard cut',
+      preDawn > deep,
+      `05:30 ${preDawn.toFixed(0)} vs night ${deep.toFixed(0)}`,
+    )
+    s.check(
+      'the clock reads morning at the start of a day',
+      dayHour(0) === 6 && dayHour(0.5) === 18 && dayHour(0.75) === 0,
+      `06:00 / 18:00 / 00:00`,
+    )
+  }
 
   const g = new Game(100, 0, 0, { profile: freshProfile('Perf') })
   const t0 = performance.now()
@@ -807,6 +880,101 @@ function securityTests(s: Suite): void {
 }
 
 /* ------------------------------------------------------------------ */
+/* ranking records                                                     */
+/* ------------------------------------------------------------------ */
+
+function recordsTests(s: Suite): void {
+  clearRecords()
+  s.check('an empty board loads as a valid, empty object', Object.keys(loadRecords().cities).length === 0)
+
+  recordCityTime(7, 12.5)
+  recordCityTime(7, 20) // slower replay must not replace a good time
+  s.check(
+    'a level timer is banked and only a faster clear replaces it',
+    loadRecords().cities['7'] === 12.5,
+    `city 7 -> ${loadRecords().cities['7']}`,
+  )
+  // times are stored to a tenth of a second, so 8.25 is banked as 8.3
+  recordCityTime(7, 8.2)
+  s.check('a faster clear does replace it', loadRecords().cities['7'] === 8.2, `8.2s kept`)
+
+  recordCityTime(0, 5)
+  recordCityTime(101, 5)
+  recordCityTime(3, -4)
+  recordCityTime(3, Number.NaN)
+  recordCityTime(3, 99_999)
+  s.check(
+    'junk times and out of range cities are refused outright',
+    Object.keys(loadRecords().cities).length === 1,
+    JSON.stringify(loadRecords().cities),
+  )
+
+  recordRun(600)
+  recordRun(500)
+  s.check(
+    'completed runs are kept fastest first',
+    loadRecords().runs[0]?.seconds === 500,
+    JSON.stringify(loadRecords().runs.map((r) => r.seconds)),
+  )
+
+  // a crafted board must never reach Object.prototype or smuggle keys in
+  writeRaw(
+    RECORDS_KEY,
+    '{"version":1,"cities":{"__proto__":{"polluted":true},"constructor":9,"12":"fast","13":4.5},"runs":[{"seconds":"x"},{"seconds":30}]}',
+  )
+  const poll = loadRecords()
+  const polluted = ({} as Record<string, unknown>).polluted !== undefined
+  s.check('a crafted board cannot pollute Object.prototype', !polluted)
+  s.check(
+    'only real city numbers with sane times survive a crafted board',
+    Object.keys(poll.cities).join(',') === '13' && poll.runs.length === 1 && poll.runs[0].seconds === 30,
+    JSON.stringify(poll),
+  )
+
+  writeRaw(RECORDS_KEY, 'x'.repeat(70_000))
+  const bigStart = performance.now()
+  const big = loadRecords()
+  const bigMs = performance.now() - bigStart
+  s.check(
+    'an oversized board is dropped fast instead of hanging the tab',
+    Object.keys(big.cities).length === 0 && bigMs < 250,
+    `${bigMs.toFixed(1)}ms`,
+  )
+
+  // integration: the engine banks a level timer on the city it just cleared
+  clearRecords()
+  const g = new Game(7, 0, 0, { profile: freshProfile('Timed') })
+  g.cityTimeSec = 42.2
+  g.nextCity()
+  s.check(
+    'the engine banks the level timer when a city is cleared',
+    loadRecords().cities['7'] === 42.2 && g.cityTimeSec === 0,
+    `city 7 -> ${loadRecords().cities['7']}, stopwatch reset to ${g.cityTimeSec}`,
+  )
+
+  // a full run record is only honest when the whole 100 was played in one sitting
+  const partial = new Game(100, 0, 0, { profile: freshProfile('Partial') })
+  partial.runTimeSec = 120
+  partial.nextCity()
+  s.check(
+    'clearing City 100 after a mid run resume does NOT bank a full run time',
+    loadRecords().runs.length === 0 && partial.status === 'victory',
+    `${loadRecords().runs.length} run record(s)`,
+  )
+
+  const full = new Game(100, 0, 0, { profile: freshProfile('Finisher') })
+  ;(full as unknown as { clearedThisSession: number }).clearedThisSession = 100
+  full.runTimeSec = 3661.4
+  full.nextCity()
+  s.check(
+    'a City 1 to City 100 run in one sitting is banked as a full run',
+    loadRecords().runs[0]?.seconds === 3661.4 && fmtClock(3661.4) === '1:01:01',
+    loadRecords().runs.map((r) => `${r.seconds}s (${fmtClock(r.seconds)})`).join(', '),
+  )
+  clearRecords()
+}
+
+/* ------------------------------------------------------------------ */
 /* entry point                                                         */
 /* ------------------------------------------------------------------ */
 
@@ -814,6 +982,7 @@ export function runSelfTest(): SelfTestReport {
   const s = new Suite()
   const savedSave = readRaw(PROFILE_KEY)
   const savedLegacy = readRaw('border-run-save-v1')
+  const savedRecords = readRaw(RECORDS_KEY)
 
   try {
     generationTests(s)
@@ -825,11 +994,14 @@ export function runSelfTest(): SelfTestReport {
     renderTests(s)
     profileTests(s)
     securityTests(s)
+    recordsTests(s)
   } catch (err) {
     s.check('the suite ran to completion without throwing', false, `${err}`)
   } finally {
     restoreRaw(PROFILE_KEY, savedSave)
     restoreRaw('border-run-save-v1', savedLegacy)
+    // the suite clears cities, which banks ranking times — put the real board back
+    restoreRaw(RECORDS_KEY, savedRecords)
   }
 
   const failed = s.results.filter((r) => !r.ok).length
@@ -858,4 +1030,7 @@ export const _internals = {
   mapSize,
   clueCount,
   TS,
+  dayLight,
+  dayHour,
+  loadRecords,
 }

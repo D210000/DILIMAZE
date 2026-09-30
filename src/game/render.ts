@@ -1,18 +1,25 @@
 import { TS, clueAssist } from './city'
 import { drawCharacter } from './character'
 import { BRAND } from './brand'
-import type { Game } from './engine'
-import type { Prop, Region, World } from './types'
+import { dayLight, type Game } from './engine'
+import type { Guard, Prop, Region, TileKind, World } from './types'
 
 /**
- * Dlicom world renderer: near-black ground, magenta/cyan neon rims on anything
- * interactive, soft red-orange guard cones. The player avatar itself is drawn
- * by character.ts (swap in a real sprite there, not here).
+ * Dlicom world renderer.
+ *
+ * The city is drawn as a raised, tilted view rather than a flat map: every
+ * building block is a 3D box with a lit roof, a shadowed street facing wall and
+ * a doorway with steps, roads carry painted crossings and lane dashes, and loose
+ * props sit as small boxes on the pavement. The player avatar itself is still
+ * drawn by character.ts, untouched by any of this.
  */
 
 const C = BRAND.colors
 /** display face for in-world labels (see @font-face in index.css) */
 const DISPLAY = '"Youre Gone", ui-monospace, monospace'
+
+/** how deep the south (camera facing) wall of a building block is drawn */
+const WALL_STEPS = [13, 17, 21] as const
 
 export function render(ctx: CanvasRenderingContext2D, game: Game, viewW: number, viewH: number) {
   const world = game.world
@@ -130,12 +137,10 @@ export function render(ctx: CanvasRenderingContext2D, game: Game, viewW: number,
   // ambient depth: magenta bloom at the edges, night tint on top
   drawVignette(ctx, viewW, viewH, r)
 
-  const dayFrac = game.timeSec / world.dayLengthSec
-  // night still reads as night and still sharpens the guards' cones, but the
-  // street stays legible: the tint is a violet wash, never a blackout
-  let darkness = 0
-  if (dayFrac > 0.7) darkness = Math.min(0.45, ((dayFrac - 0.7) / 0.15) * 0.45)
-  if (dayFrac < 0.12) darkness = Math.max(0, 0.45 * (1 - dayFrac / 0.12))
+  // A city opens in full sun and darkens toward night as the play goes on;
+  // dayLight owns that curve so the guards' night senses agree with the picture.
+  // The tint is a violet wash, never a blackout.
+  const { darkness } = dayLight(game.timeSec / world.dayLengthSec)
   if (darkness > 0) {
     ctx.fillStyle = `rgba(24, 16, 58, ${darkness})`
     ctx.fillRect(0, 0, viewW, viewH)
@@ -143,8 +148,8 @@ export function render(ctx: CanvasRenderingContext2D, game: Game, viewW: number,
     const sx = p.x - camX
     const sy = p.y - camY
     const grad = ctx.createRadialGradient(sx, sy, 20, sx, sy, 260)
-    grad.addColorStop(0, `rgba(255, 170, 225, ${0.3 * darkness})`)
-    grad.addColorStop(0.5, `rgba(150, 90, 220, ${0.14 * darkness})`)
+    grad.addColorStop(0, `rgba(255, 170, 225, ${0.44 * darkness})`)
+    grad.addColorStop(0.5, `rgba(150, 90, 220, ${0.2 * darkness})`)
     grad.addColorStop(1, 'rgba(0,0,0,0)')
     ctx.fillStyle = grad
     ctx.fillRect(0, 0, viewW, viewH)
@@ -180,60 +185,312 @@ function drawTiles(
   const y1 = Math.min(world.h - 1, Math.ceil((camY + viewH) / TS))
   const r = world.region
   const t = performance.now() / 1000
+  const at = (x: number, y: number): TileKind | null =>
+    x < 0 || y < 0 || x >= world.w || y >= world.h ? null : world.tiles[y * world.w + x]
+  const isRoad = (x: number, y: number) => at(x, y) === 'road'
+  /**
+   * A junction is where a street running north/south crosses one running east/
+   * west, so the road has to carry on four tiles out on BOTH axes. Tested two
+   * tiles out, the middle of a lone street would already look like a junction
+   * (it has road above, below and to both sides), which painted most of the map
+   * with crossing stripes.
+   */
+  const isJunction = (x: number, y: number) =>
+    isRoad(x, y) && isRoad(x, y - 4) && isRoad(x, y + 4) && isRoad(x - 4, y) && isRoad(x + 4, y)
 
+  /* ---- pass 1: the ground the city sits on -------------------------- */
   for (let y = y0; y <= y1; y++)
     for (let x = x0; x <= x1; x++) {
       const tile = world.tiles[y * world.w + x]
-      let color = r.grass
-      if (tile === 'road') color = r.road
-      else if (tile === 'sidewalk') color = lighten(r.road, 16)
-      else if (tile === 'plaza') color = lighten(r.building, 12)
-      else if (tile === 'park') color = lighten(r.grass, 16)
-      else if (tile === 'building') color = r.buildingAlt
-      else if (tile === 'water') color = r.neon2
-      ctx.fillStyle = color
-      ctx.fillRect(x * TS, y * TS, TS, TS)
+      if (tile === 'building') continue
+      const px = x * TS
+      const py = y * TS
 
-      if (tile === 'building') {
-        // rooftops: a light shade only, so the block still reads as a block
-        ctx.fillStyle = 'rgba(10, 8, 30, 0.12)'
-        ctx.fillRect(x * TS, y * TS, TS, TS)
-        // lit windows, deterministic per tile
-        const seed = (x * 73856093) ^ (y * 19349663)
-        const lit = Math.abs(seed) % 5
-        if (lit < 3) {
-          const count = lit < 1 ? 3 : 2
-          ctx.fillStyle = withAlpha(r.neon, 0.9)
-          ctx.fillRect(x * TS + 6, y * TS + 8, 5, 5)
-          ctx.fillRect(x * TS + 17, y * TS + 19, 5, 5)
-          if (count === 3) ctx.fillRect(x * TS + 23, y * TS + 8, 5, 5)
-          ctx.fillStyle = withAlpha(r.neon2, 0.8)
-          ctx.fillRect(x * TS + 14, y * TS + 8, 5, 5)
-          ctx.fillRect(x * TS + 7, y * TS + 19, 5, 5)
-        }
-        ctx.strokeStyle = withAlpha(r.neon2, 0.5)
-        ctx.lineWidth = 1.4
-        ctx.strokeRect(x * TS + 0.5, y * TS + 0.5, TS - 1, TS - 1)
-      } else if (tile === 'road') {
-        // dashed neon lane marking on vertical roads
-        if (world.tiles[y * world.w + Math.min(world.w - 1, x + 1)] === 'road' && y % 2 === 0) {
-          ctx.fillStyle = withAlpha('#ffffff', 0.32)
-          ctx.fillRect(x * TS + TS / 2 - 1, y * TS + 6, 2, 9)
-        }
+      if (tile === 'road') {
+        paintRoad(ctx, r, x, y, px, py, isRoad, isJunction)
+      } else if (tile === 'sidewalk') {
+        // neutral stone paving with a kerb lip along every street edge, so the
+        // pavements stay clearly separate from the coloured road and the roofs
+        ctx.fillStyle = lighten(desaturate(r.road, 0.5), 24)
+        ctx.fillRect(px, py, TS, TS)
+        ctx.fillStyle = 'rgba(10, 6, 30, 0.09)'
+        ctx.fillRect(px, py + 15, TS, 1.6)
+        ctx.fillRect(px + 15, py, 1.6, TS)
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.3)'
+        if (isRoad(x, y - 1)) ctx.fillRect(px, py, TS, 3)
+        if (isRoad(x, y + 1)) ctx.fillRect(px, py + TS - 3, TS, 3)
+        if (isRoad(x - 1, y)) ctx.fillRect(px, py, 3, TS)
+        if (isRoad(x + 1, y)) ctx.fillRect(px + TS - 3, py, 3, TS)
+        ctx.fillStyle = 'rgba(8, 5, 24, 0.2)'
+        if (isRoad(x, y - 1)) ctx.fillRect(px, py + 3, TS, 2)
+        if (isRoad(x, y + 1)) ctx.fillRect(px, py + TS - 5, TS, 2)
+        if (isRoad(x - 1, y)) ctx.fillRect(px + 3, py, 2, TS)
+        if (isRoad(x + 1, y)) ctx.fillRect(px + TS - 5, py, 2, TS)
+      } else if (tile === 'plaza') {
+        // checkerboard stone, so open squares read differently from pavement
+        ctx.fillStyle =
+          (x + y) % 2 === 0 ? lighten(desaturate(r.building, 0.45), 32) : lighten(desaturate(r.building, 0.45), 24)
+        ctx.fillRect(px, py, TS, TS)
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.05)'
+        ctx.fillRect(px + 4, py + 4, TS - 8, TS - 8)
+        ctx.fillStyle = 'rgba(10, 6, 30, 0.08)'
+        ctx.fillRect(px, py + 15, TS, 1.4)
+        ctx.fillRect(px + 15, py, 1.4, TS)
       } else if (tile === 'park') {
-        ctx.fillStyle = withAlpha(r.neon2, 0.1)
-        ctx.fillRect(x * TS, y * TS, TS, TS)
-        // a couple of blades so parks read as green space, not just pavement
-        ctx.fillStyle = withAlpha('#7ef7a8', 0.22)
-        ctx.fillRect(x * TS + 8, y * TS + 20, 3, 6)
-        ctx.fillRect(x * TS + 21, y * TS + 12, 3, 6)
+        ctx.fillStyle = lighten(r.grass, 18)
+        ctx.fillRect(px, py, TS, TS)
+        // mown stripes
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.045)'
+        ctx.fillRect(px, py + (y % 2) * 16, TS, 16)
+        ctx.fillStyle = withAlpha('#7ef7a8', 0.24)
+        ctx.fillRect(px + 8, py + 20, 3, 6)
+        ctx.fillRect(px + 21, py + 12, 3, 6)
+      } else if (tile === 'water') {
+        ctx.fillStyle = shift(r.neon2, -40)
+        ctx.fillRect(px, py, TS, TS)
+        const ripple = (t * 0.5 + tileHash(x, y)) % 1
+        ctx.fillStyle = withAlpha(r.neon2, 0.4)
+        ctx.fillRect(px + 3, py + 4 + ripple * 20, TS - 6, 2)
+      } else {
+        ctx.fillStyle = r.grass
+        ctx.fillRect(px, py, TS, TS)
+        if (tileHash(x, y) > 0.5) {
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.04)'
+          ctx.fillRect(px + 4 + tileHash(y, x) * 20, py + 5 + tileHash(x + 3, y) * 20, 3, 3)
+        }
       }
+    }
+
+  /* ---- pass 2: the blocks themselves, raised into 3D ------------------
+   * Rows are painted top to bottom, so a block further down the screen hides
+   * the wall of the block behind it, which is what gives the city its depth. */
+  for (let y = y0; y <= y1; y++)
+    for (let x = x0; x <= x1; x++) {
+      if (world.tiles[y * world.w + x] !== 'building') continue
+      const px = x * TS
+      const py = y * TS
+      const southOpen = at(x, y + 1) !== 'building'
+      const eastOpen = at(x + 1, y) !== 'building'
+      // a 2x2 chunk shares one height, so a block reads as one building
+      const wall = WALL_STEPS[Math.floor(tileHash(x >> 1, y >> 1) * WALL_STEPS.length) % WALL_STEPS.length]
+
+      // contact shadow on the street the block stands on
+      if (southOpen) {
+        ctx.fillStyle = 'rgba(6, 4, 20, 0.34)'
+        ctx.fillRect(px, py + TS + wall, TS, 5)
+      }
+      if (eastOpen) {
+        ctx.fillStyle = 'rgba(6, 4, 20, 0.26)'
+        ctx.fillRect(px + TS, py + wall, 5, TS)
+      }
+
+      // the south wall: the face you walk past from the street
+      if (southOpen) {
+        const faceY = py + TS
+        ctx.fillStyle = shade(r.buildingAlt, 26)
+        ctx.fillRect(px, faceY, TS, wall)
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.08)'
+        ctx.fillRect(px, faceY + Math.round(wall * 0.45), TS, 1)
+        // wall windows
+        const lit = tileHash(x, y + 7)
+        ctx.fillStyle = withAlpha(r.neon, 0.7)
+        if (lit > 0.35) ctx.fillRect(px + 5, faceY + 2, 6, 4)
+        if (lit > 0.7) ctx.fillRect(px + 20, faceY + 2, 6, 4)
+        ctx.fillStyle = withAlpha(r.neon2, 0.55)
+        if (lit < 0.6) ctx.fillRect(px + 13, faceY + 2, 5, 4)
+        // plinth along the base, then the parapet lip under the roof
+        ctx.fillStyle = shade(r.buildingAlt, 42)
+        ctx.fillRect(px, faceY + wall - 2, TS, 2)
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.2)'
+        ctx.fillRect(px, faceY - 1.6, TS, 1.6)
+
+        // every block that faces open ground gets a doorway with a flight of
+        // steps spilling out of it onto the pavement
+        const below = at(x, y + 1)
+        if (below === 'sidewalk' || below === 'road' || below === 'plaza' || below === 'park') {
+          const doorX = px + 10 + Math.round(tileHash(y + 9, x) * 12)
+          const steps = wall > 16 ? 4 : 3
+          // a dark apron first, so the treads stand out on pale pavement
+          ctx.fillStyle = 'rgba(6, 4, 20, 0.34)'
+          ctx.fillRect(doorX - 19, faceY + wall, 38, steps * 4 + 2)
+          ctx.fillStyle = 'rgba(5, 3, 18, 0.82)'
+          ctx.fillRect(doorX - 7, faceY + 1, 14, wall - 1)
+          ctx.fillStyle = withAlpha(C.gold, 0.6)
+          ctx.fillRect(doorX - 7, faceY + wall - 4, 14, 1.6)
+          drawSteps(
+            ctx,
+            doorX,
+            faceY + wall,
+            steps,
+            shade(r.buildingAlt, 44),
+            lighten(desaturate(r.building, 0.5), 100),
+          )
+        }
+      }
+
+      // the roof, two tones so the block clearly has a top face: a lit parapet
+      // ring with a slightly recessed surface inside it
+      ctx.fillStyle = lighten(r.building, 30)
+      ctx.fillRect(px, py, TS, TS)
+      ctx.fillStyle = lighten(r.building, 14)
+      ctx.fillRect(px + 3, py + 3, TS - 6, TS - 6)
+
+      // skylights and rooftop clutter, deterministic per tile
+      const seed = Math.abs((x * 73856093) ^ (y * 19349663)) % 5
+      if (seed < 3) {
+        ctx.fillStyle = withAlpha(r.neon, 0.85)
+        ctx.fillRect(px + 6, py + 7, 5, 5)
+        ctx.fillRect(px + 17, py + 18, 5, 5)
+        ctx.fillStyle = withAlpha(r.neon2, 0.75)
+        ctx.fillRect(px + 14, py + 7, 5, 5)
+      }
+      const clutter = tileHash(x + 31, y + 17)
+      if (clutter > 0.78) {
+        // air conditioning unit
+        prism(ctx, px + 11, py + 16, 13, 5, 6, lighten(r.building, 52), shade(r.building, 16))
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.18)'
+        ctx.fillRect(px + 5, py + 6, 12, 1.4)
+      } else if (clutter > 0.64) {
+        // roof hatch
+        prism(ctx, px + 21, py + 23, 9, 4, 5, lighten(r.building, 48), shade(r.building, 12))
+      } else if (clutter > 0.48) {
+        // water tank on legs
+        prism(ctx, px + 9, py + 24, 11, 4, 7, lighten(r.building, 56), shade(r.building, 4))
+        ctx.strokeStyle = withAlpha(r.neon2, 0.6)
+        ctx.lineWidth = 1.2
+        ctx.strokeRect(px + 4, py + 13, 11, 11)
+      }
+
+      // lit rims only on the outer edges of a block, never across its middle
+      ctx.strokeStyle = withAlpha(r.neon2, 0.5)
+      ctx.lineWidth = 1.4
+      ctx.beginPath()
+      if (at(x, y - 1) !== 'building') {
+        ctx.moveTo(px, py + 0.7)
+        ctx.lineTo(px + TS, py + 0.7)
+      }
+      if (at(x - 1, y) !== 'building') {
+        ctx.moveTo(px + 0.7, py)
+        ctx.lineTo(px + 0.7, py + TS)
+      }
+      if (eastOpen) {
+        ctx.moveTo(px + TS - 0.7, py)
+        ctx.lineTo(px + TS - 0.7, py + TS)
+      }
+      ctx.stroke()
     }
 
   // slow scanline sweep sells the "digital underworld" look — cheap and subtle
   const sweep = ((t * 40) % (viewH + 200)) - 100
   ctx.fillStyle = withAlpha(r.neon2, 0.05)
   ctx.fillRect(camX, camY + sweep, viewW, 3)
+}
+
+/**
+ * Asphalt, kerb lines, a painted crossing ring around junctions and dashes
+ * along the middle of every street.
+ */
+function paintRoad(
+  ctx: CanvasRenderingContext2D,
+  r: Region,
+  x: number,
+  y: number,
+  px: number,
+  py: number,
+  isRoad: (x: number, y: number) => boolean,
+  isJunction: (x: number, y: number) => boolean,
+) {
+  const up = isRoad(x, y - 1)
+  const down = isRoad(x, y + 1)
+  const left = isRoad(x - 1, y)
+  const right = isRoad(x + 1, y)
+
+  ctx.fillStyle = r.road
+  ctx.fillRect(px, py, TS, TS)
+  // a sheen band so the surface is not a flat slab
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.045)'
+  ctx.fillRect(px, py + 4, TS, 11)
+
+  // worn gutters and a painted edge line where the street meets the kerb
+  ctx.fillStyle = 'rgba(8, 5, 24, 0.18)'
+  if (!left) ctx.fillRect(px, py, 3, TS)
+  if (!right) ctx.fillRect(px + TS - 3, py, 3, TS)
+  if (!up) ctx.fillRect(px, py, TS, 3)
+  if (!down) ctx.fillRect(px, py + TS - 3, TS, 3)
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.17)'
+  if (!left) ctx.fillRect(px + 3, py, 1.4, TS)
+  if (!right) ctx.fillRect(px + TS - 4.4, py, 1.4, TS)
+  if (!up) ctx.fillRect(px, py + 3, TS, 1.4)
+  if (!down) ctx.fillRect(px, py + TS - 4.4, TS, 1.4)
+
+  // the middle of an intersection: darker tarmac with a painted box around the
+  // whole junction. The box is drawn edge by edge, only where the neighbour is
+  // not part of the junction too, so the middle stays one open square instead of
+  // a grid of outlined tiles.
+  if (isJunction(x, y)) {
+    ctx.fillStyle = 'rgba(6, 4, 20, 0.18)'
+    ctx.fillRect(px, py, TS, TS)
+    const inset = 6
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.14)'
+    ctx.lineWidth = 1.4
+    ctx.beginPath()
+    if (!isJunction(x, y - 1)) {
+      ctx.moveTo(px + inset, py + inset)
+      ctx.lineTo(px + TS - inset, py + inset)
+    }
+    if (!isJunction(x, y + 1)) {
+      ctx.moveTo(px + inset, py + TS - inset)
+      ctx.lineTo(px + TS - inset, py + TS - inset)
+    }
+    if (!isJunction(x - 1, y)) {
+      ctx.moveTo(px + inset, py + inset)
+      ctx.lineTo(px + inset, py + TS - inset)
+    }
+    if (!isJunction(x + 1, y)) {
+      ctx.moveTo(px + TS - inset, py + inset)
+      ctx.lineTo(px + TS - inset, py + TS - inset)
+    }
+    ctx.stroke()
+    return
+  }
+
+  // zebra bars on the one tile either side of a junction. The bars run with the
+  // traffic and are repeated across the road, and only the street tiles get
+  // them, never the junction block itself, which used to stripe most of the map.
+  let crossing: 'v' | 'h' | null = null
+  if (up && down && (isJunction(x, y - 1) || isJunction(x, y + 1))) crossing = 'v'
+  else if (left && right && (isJunction(x - 1, y) || isJunction(x + 1, y))) crossing = 'h'
+
+  if (crossing) {
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.32)'
+    for (let i = 0; i < 4; i++) {
+      if (crossing === 'v') ctx.fillRect(px + 3 + i * 8, py + 3, 4, TS - 6)
+      else ctx.fillRect(px + 3, py + 3 + i * 8, TS - 6, 4)
+    }
+    return
+  }
+
+  // lane dashes along the middle of a street (never into a junction)
+  const midV = left && right && !isRoad(x - 2, y) && !isRoad(x + 2, y)
+  const midH = up && down && !isRoad(x, y - 2) && !isRoad(x, y + 2)
+  ctx.fillStyle = 'rgba(255, 244, 205, 0.4)'
+  if (midV && (Math.abs(y) % 2 === 0)) ctx.fillRect(px + TS / 2 - 2, py + 6, 4, 20)
+  else if (midH && (Math.abs(x) % 2 === 0)) ctx.fillRect(px + 6, py + TS / 2 - 2, 20, 4)
+
+  // manhole covers and patched asphalt
+  const h = tileHash(x, y)
+  if (h > 0.88) {
+    ctx.fillStyle = 'rgba(10, 6, 28, 0.34)'
+    ctx.beginPath()
+    ctx.arc(px + 16, py + 16, 5, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.16)'
+    ctx.lineWidth = 1
+    ctx.stroke()
+  } else if (h < 0.06) {
+    ctx.fillStyle = 'rgba(10, 6, 28, 0.16)'
+    ctx.fillRect(px + 5, py + 19, 22, 9)
+  }
 }
 
 function drawGate(ctx: CanvasRenderingContext2D, world: World, game: Game) {
@@ -294,69 +551,100 @@ function drawProp(ctx: CanvasRenderingContext2D, pr: Prop, world: World) {
   }
 
   switch (pr.kind) {
-    case 'tree':
-      ctx.fillStyle = '#463a63'
-      ctx.fillRect(x - 2, y - 2, 4, 10)
-      ctx.fillStyle = '#3f8f60'
+    case 'tree': {
+      // trunk as a small box, canopy as a dome stacked above it
+      prism(ctx, x, y + 5, 7, 3, 9, '#5a4a80', '#372c52')
+      const cy = y - 13
+      ctx.fillStyle = '#2f7c50'
       ctx.beginPath()
-      ctx.arc(x, y - 7, 9, 0, Math.PI * 2)
+      ctx.arc(x, cy + 3, 10, 0, Math.PI * 2)
       ctx.fill()
-      ctx.fillStyle = 'rgba(255,255,255,0.16)'
+      ctx.fillStyle = '#45996a'
       ctx.beginPath()
-      ctx.arc(x - 3, y - 10, 3.4, 0, Math.PI * 2)
+      ctx.arc(x, cy, 10, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.fillStyle = 'rgba(255,255,255,0.18)'
+      ctx.beginPath()
+      ctx.arc(x - 3, cy - 3, 3.6, 0, Math.PI * 2)
       ctx.fill()
       ctx.strokeStyle = withAlpha(r.neon2, 0.7)
       ctx.lineWidth = 1.2
+      ctx.beginPath()
+      ctx.arc(x, cy, 10, 0, Math.PI * 2)
       ctx.stroke()
       break
-    case 'bush':
+    }
+    case 'bush': {
       // a hiding bush must read as cover on bright pavement
-      ctx.fillStyle = pr.used ? '#3d7a52' : '#4aa06a'
+      const leaf = pr.used ? '#37704a' : '#458f5f'
+      ctx.fillStyle = shade(leaf, 26)
       ctx.beginPath()
-      ctx.arc(x, y, 9.5, 0, Math.PI * 2)
+      ctx.arc(x, y + 2, 10, 0, Math.PI * 2)
       ctx.fill()
-      ctx.fillStyle = 'rgba(255,255,255,0.14)'
+      ctx.fillStyle = leaf
       ctx.beginPath()
-      ctx.arc(x - 3, y - 3, 3.6, 0, Math.PI * 2)
+      ctx.arc(x, y - 1, 9.5, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.fillStyle = 'rgba(255,255,255,0.16)'
+      ctx.beginPath()
+      ctx.arc(x - 3, y - 4, 3.6, 0, Math.PI * 2)
       ctx.fill()
       ctx.strokeStyle = withAlpha(r.neon, 0.75)
       ctx.lineWidth = 1.2
+      ctx.beginPath()
+      ctx.arc(x, y - 1, 9.5, 0, Math.PI * 2)
       ctx.stroke()
       break
-    case 'bench':
-      ctx.fillStyle = pr.data === 'sleep' ? '#7d3f96' : '#5b4880'
-      ctx.fillRect(x - 10, y - 4, 20, 6)
+    }
+    case 'bench': {
+      const seat = pr.data === 'sleep' ? '#8342a0' : '#5b4880'
+      // slab seat with a back rest behind it, so it reads in 3D
+      prism(ctx, x, y + 5, 22, 7, 5, seat, shade(seat, 34))
       ctx.fillStyle = pr.data === 'sleep' ? r.neon : '#8a72b4'
-      ctx.fillRect(x - 10, y - 6, 20, 2)
+      ctx.fillRect(x - 11, y - 13, 22, 3)
+      ctx.fillStyle = shade(seat, 36)
+      ctx.fillRect(x - 11, y - 10, 22, 2)
+      ctx.fillRect(x - 10, y - 10, 2, 9)
+      ctx.fillRect(x + 8, y - 10, 2, 9)
       break
-    case 'fountain':
+    }
+    case 'fountain': {
+      // raised rim with water inside and a jet above it
+      ctx.fillStyle = shade('#356085', 26)
+      ctx.beginPath()
+      ctx.arc(x, y + 2, 13, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.fillStyle = '#8ec2e4'
+      ctx.beginPath()
+      ctx.arc(x, y - 1, 13, 0, Math.PI * 2)
+      ctx.fill()
       ctx.fillStyle = '#356085'
       ctx.beginPath()
-      ctx.arc(x, y, 12, 0, Math.PI * 2)
+      ctx.arc(x, y - 1, 9.5, 0, Math.PI * 2)
       ctx.fill()
-      ctx.strokeStyle = withAlpha(C.cyan, 0.5)
+      ctx.strokeStyle = withAlpha(C.cyan, 0.55)
       ctx.lineWidth = 1.5
+      ctx.beginPath()
+      ctx.arc(x, y - 1, 9.5, 0, Math.PI * 2)
       ctx.stroke()
-      ctx.fillStyle = C.cyan
+      const jet = Math.sin(performance.now() / 320) * 1.5
+      ctx.fillStyle = withAlpha(C.cyan, 0.9)
       ctx.beginPath()
-      ctx.arc(x, y, 7, 0, Math.PI * 2)
-      ctx.fill()
-      ctx.fillStyle = 'rgba(255,255,255,0.7)'
-      ctx.beginPath()
-      ctx.arc(x - 2, y - 2, 2.6, 0, Math.PI * 2)
+      ctx.arc(x, y - 6 + jet, 2.8, 0, Math.PI * 2)
       ctx.fill()
       break
+    }
     case 'crate': {
-      ctx.fillStyle = '#7a5a94'
-      ctx.fillRect(x - 10, y - 10, 20, 20)
+      // climbable cover: a chunky braced box
+      prism(ctx, x, y + 5, 20, 8, 10, '#8d68ad', '#5a3f78')
       ctx.strokeStyle = r.neon
       ctx.lineWidth = 1.5
-      ctx.strokeRect(x - 10, y - 10, 20, 20)
+      ctx.strokeRect(x - 10, y - 5, 20, 10)
       ctx.beginPath()
-      ctx.moveTo(x - 10, y - 10)
-      ctx.lineTo(x + 10, y + 10)
-      ctx.moveTo(x + 10, y - 10)
-      ctx.lineTo(x - 10, y + 10)
+      ctx.moveTo(x - 10, y - 5)
+      ctx.lineTo(x + 10, y + 5)
+      ctx.moveTo(x + 10, y - 5)
+      ctx.lineTo(x - 10, y + 5)
       ctx.stroke()
       break
     }
@@ -365,32 +653,32 @@ function drawProp(ctx: CanvasRenderingContext2D, pr: Prop, world: World) {
       ctx.lineWidth = 1.8
       for (let i = -2; i <= 2; i++) {
         ctx.beginPath()
-        ctx.moveTo(x + i * 5, y - 8)
+        ctx.moveTo(x + i * 5, y - 10)
         ctx.lineTo(x + i * 5, y + 8)
         ctx.stroke()
       }
       ctx.beginPath()
-      ctx.moveTo(x - 12, y - 5)
-      ctx.lineTo(x + 12, y - 5)
-      ctx.moveTo(x - 12, y + 5)
-      ctx.lineTo(x + 12, y + 5)
+      ctx.moveTo(x - 12, y - 6)
+      ctx.lineTo(x + 12, y - 6)
+      ctx.moveTo(x - 12, y + 4)
+      ctx.lineTo(x + 12, y + 4)
       ctx.stroke()
+      ctx.fillStyle = 'rgba(8, 5, 24, 0.3)'
+      ctx.fillRect(x - 12, y + 9, 24, 3)
       break
     case 'dumpster':
-      ctx.fillStyle = '#2f6a5e'
-      ctx.fillRect(x - 11, y - 8, 22, 16)
+      prism(ctx, x, y + 5, 22, 8, 9, '#4a9c8b', '#286356')
       ctx.fillStyle = '#3a8070'
-      ctx.fillRect(x - 11, y - 8, 22, 5)
+      ctx.fillRect(x - 11, y - 12, 22, 3)
       ctx.strokeStyle = withAlpha(C.cyan, 0.6)
-      ctx.lineWidth = 1.5
-      ctx.strokeRect(x - 11, y - 8, 22, 16)
+      ctx.lineWidth = 1.4
+      ctx.strokeRect(x - 11, y - 4, 22, 9)
       break
     case 'trash':
-      ctx.fillStyle = '#66578f'
-      ctx.fillRect(x - 5, y - 7, 10, 13)
+      prism(ctx, x, y + 5, 12, 4, 9, '#8a79b6', '#4b4070')
       ctx.strokeStyle = withAlpha(C.cyan, 0.5)
       ctx.lineWidth = 1.2
-      ctx.strokeRect(x - 5, y - 7, 10, 13)
+      ctx.strokeRect(x - 6, y - 4, 12, 9)
       break
     case 'coin': {
       // $DLI token
@@ -410,15 +698,20 @@ function drawProp(ctx: CanvasRenderingContext2D, pr: Prop, world: World) {
       ctx.textAlign = 'left'
       break
     }
-    case 'stall':
+    case 'stall': {
+      // a counter with posts and a striped awning over it
+      prism(ctx, x, y + 6, 24, 7, 8, '#7a66a8', '#4b3b73')
       ctx.fillStyle = r.neon
-      ctx.fillRect(x - 12, y - 12, 24, 9)
-      ctx.fillStyle = '#5c4d86'
-      ctx.fillRect(x - 10, y - 3, 20, 9)
-      ctx.strokeStyle = withAlpha(C.cyan, 0.55)
-      ctx.lineWidth = 1.5
-      ctx.strokeRect(x - 12, y - 12, 24, 18)
+      ctx.fillRect(x - 12, y + 1, 24, 2.4)
+      ctx.fillStyle = '#6b58a0'
+      ctx.fillRect(x - 11, y - 14, 3, 16)
+      ctx.fillRect(x + 8, y - 14, 3, 16)
+      ctx.fillStyle = r.neon
+      ctx.fillRect(x - 13, y - 18, 26, 4)
+      ctx.fillStyle = shade(r.neon, 36)
+      ctx.fillRect(x - 13, y - 14, 26, 2)
       break
+    }
     case 'shop':
     case 'bar':
     case 'house':
@@ -428,20 +721,34 @@ function drawProp(ctx: CanvasRenderingContext2D, pr: Prop, world: World) {
     case 'kid':
       drawClueProp(ctx, pr, r)
       break
-    case 'waterTower':
-      ctx.fillStyle = '#9186c0'
-      ctx.fillRect(x - 12, y - 20, 4, 30)
-      ctx.fillRect(x + 8, y - 20, 4, 30)
-      ctx.fillStyle = '#ada2d6'
-      ctx.fillRect(x - 14, y - 26, 28, 12)
+    case 'waterTower': {
+      // legs, a 3D tank and a cone roof above it
+      ctx.strokeStyle = '#9186c0'
+      ctx.lineWidth = 3
+      ctx.beginPath()
+      ctx.moveTo(x - 9, y + 6)
+      ctx.lineTo(x - 6, y - 12)
+      ctx.moveTo(x + 9, y + 6)
+      ctx.lineTo(x + 6, y - 12)
+      ctx.stroke()
+      prism(ctx, x, y - 12, 26, 8, 12, '#bdb2e4', '#6f64a4')
+      ctx.fillStyle = '#ddd5ff'
+      ctx.beginPath()
+      ctx.moveTo(x - 13, y - 20)
+      ctx.lineTo(x + 13, y - 20)
+      ctx.lineTo(x, y - 29)
+      ctx.closePath()
+      ctx.fill()
       ctx.strokeStyle = withAlpha(C.cyan, 0.6)
       ctx.lineWidth = 1.5
-      ctx.strokeRect(x - 14, y - 26, 28, 12)
-      ctx.fillStyle = withAlpha(C.cyan, 0.5)
-      ctx.fillRect(x - 7, y - 22, 2, 4)
-      ctx.fillRect(x - 1, y - 22, 2, 4)
-      ctx.fillRect(x + 5, y - 22, 2, 4)
+      ctx.beginPath()
+      ctx.moveTo(x - 13, y - 20)
+      ctx.lineTo(x + 13, y - 20)
+      ctx.lineTo(x, y - 29)
+      ctx.closePath()
+      ctx.stroke()
       break
+    }
   }
   ctx.restore()
 }
@@ -513,17 +820,13 @@ function drawPropBadges(ctx: CanvasRenderingContext2D, pr: Prop, m: PropMarks) {
 /** a searched bin: lid flipped open, nothing inside */
 function drawEmptyBin(ctx: CanvasRenderingContext2D, x: number, y: number) {
   ctx.save()
-  ctx.fillStyle = '#4f4f7d'
-  ctx.fillRect(x - 5, y - 3, 10, 10)
-  ctx.strokeStyle = withAlpha(C.cyan, 0.5)
-  ctx.lineWidth = 1.2
-  ctx.strokeRect(x - 5, y - 3, 10, 10)
+  prism(ctx, x, y + 5, 12, 4, 9, '#8a79b6', '#4b4070')
   ctx.fillStyle = '#66669c'
   ctx.beginPath()
-  ctx.moveTo(x - 9, y - 6)
-  ctx.lineTo(x + 6, y - 9)
-  ctx.lineTo(x + 7, y - 6)
-  ctx.lineTo(x - 8, y - 3)
+  ctx.moveTo(x - 9, y - 1)
+  ctx.lineTo(x + 6, y - 6)
+  ctx.lineTo(x + 7, y - 3)
+  ctx.lineTo(x - 8, y + 2)
   ctx.closePath()
   ctx.fill()
   ctx.restore()
@@ -532,17 +835,14 @@ function drawEmptyBin(ctx: CanvasRenderingContext2D, x: number, y: number) {
 /** a house that already gave what it had: lights out, door shut */
 function drawShutHouse(ctx: CanvasRenderingContext2D, x: number, y: number) {
   ctx.save()
-  ctx.globalAlpha = 0.8
-  ctx.fillStyle = '#3a2f68'
-  ctx.fillRect(x - 13, y - 13, 26, 26)
-  ctx.fillStyle = '#4b3d80'
-  ctx.fillRect(x - 13, y - 13, 26, 6)
-  ctx.fillStyle = '#5c4d90'
-  ctx.fillRect(x - 3, y + 1, 6, 12)
-  ctx.strokeStyle = withAlpha(C.cyan, 0.5)
-  ctx.lineWidth = 1.2
-  ctx.strokeRect(x - 3, y + 1, 6, 12)
-  ctx.strokeRect(x - 13, y - 13, 26, 26)
+  ctx.globalAlpha = 0.9
+  prism(ctx, x, y + 7, 26, 8, 14, '#55447f', '#2d2150')
+  ctx.fillStyle = '#241a44'
+  ctx.fillRect(x - 3, y - 3, 6, 10)
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.06)'
+  ctx.fillRect(x - 12, y - 7, 7, 6)
+  ctx.fillStyle = '#6b5a9a'
+  ctx.fillRect(x - 13, y - 15, 26, 3)
   ctx.restore()
 }
 
@@ -569,146 +869,243 @@ function drawClueProp(ctx: CanvasRenderingContext2D, pr: Prop, r: Region) {
   const y = pr.y
   const neon = pr.data === 'clue' ? C.gold : r.neon
   switch (pr.kind) {
-    case 'shop':
-      ctx.fillStyle = '#3d2c66'
-      ctx.fillRect(x - 15, y - 15, 30, 30)
+    case 'shop': {
+      prism(ctx, x, y + 7, 30, 9, 16, '#5a4488', '#332655')
+      // signboard across the front face, with the doorway under it
       ctx.fillStyle = withAlpha(r.neon, 0.95)
-      ctx.fillRect(x - 15, y - 15, 30, 6)
+      ctx.fillRect(x - 15, y - 9, 30, 5)
       ctx.fillStyle = C.ink
-      ctx.font = `bold 12px ${DISPLAY}`
+      ctx.font = `bold 11px ${DISPLAY}`
       ctx.textAlign = 'center'
-      ctx.fillText(pr.data === 'food' ? 'FOOD' : 'WATER', x, y + 4)
+      ctx.fillText(pr.data === 'food' ? 'FOOD' : 'WATER', x, y - 5)
       ctx.textAlign = 'left'
-      ctx.strokeStyle = withAlpha(r.neon, 0.5)
-      ctx.lineWidth = 1.5
-      ctx.strokeRect(x - 15, y - 15, 30, 30)
+      ctx.fillStyle = withAlpha(C.gold, 0.55)
+      ctx.fillRect(x - 13, y - 2, 9, 9)
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.12)'
+      ctx.fillRect(x + 1, y - 3, 12, 8)
       break
-    case 'bar':
-      ctx.fillStyle = '#4a2f6b'
-      ctx.fillRect(x - 14, y - 14, 28, 28)
+    }
+    case 'bar': {
+      prism(ctx, x, y + 7, 28, 8, 15, '#66419a', '#3a2459')
       ctx.fillStyle = withAlpha(r.neon, 0.9)
-      ctx.fillRect(x - 14, y - 14, 28, 5)
+      ctx.fillRect(x - 14, y - 8, 28, 5)
       ctx.fillStyle = C.ink
-      ctx.font = `bold 12px ${DISPLAY}`
+      ctx.font = `bold 11px ${DISPLAY}`
       ctx.textAlign = 'center'
-      ctx.fillText('BAR', x, y + 4)
+      ctx.fillText('BAR', x, y - 4)
       ctx.textAlign = 'left'
-      ctx.strokeStyle = withAlpha(r.neon, 0.55)
-      ctx.lineWidth = 1.5
-      ctx.strokeRect(x - 14, y - 14, 28, 28)
+      ctx.fillStyle = withAlpha(C.gold, 0.5)
+      ctx.fillRect(x - 12, y - 1, 8, 8)
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.1)'
+      ctx.fillRect(x + 2, y - 2, 10, 7)
       break
-    case 'house':
-      ctx.fillStyle = '#4d3a78'
-      ctx.fillRect(x - 13, y - 13, 26, 26)
-      ctx.fillStyle = withAlpha(r.neon2, 0.75)
-      ctx.fillRect(x - 13, y - 13, 26, 6)
+    }
+    case 'house': {
+      prism(ctx, x, y + 7, 26, 8, 14, '#6b53a0', '#3d2d63')
       ctx.fillStyle = withAlpha(C.gold, 0.85)
-      ctx.fillRect(x - 3, y + 1, 6, 12)
-      ctx.fillStyle = withAlpha(C.cyan, 0.5)
-      ctx.fillRect(x - 4, y - 4, 8, 5)
-      ctx.strokeStyle = withAlpha(r.neon2, 0.35)
-      ctx.lineWidth = 1.5
-      ctx.strokeRect(x - 13, y - 13, 26, 26)
+      ctx.fillRect(x - 3, y - 3, 6, 10)
+      ctx.fillStyle = withAlpha(C.cyan, 0.55)
+      ctx.fillRect(x - 12, y - 7, 7, 6)
+      ctx.fillStyle = withAlpha(C.cyan, 0.4)
+      ctx.fillRect(x + 5, y - 7, 7, 6)
+      // parapet along the front edge of the roof
+      ctx.fillStyle = '#8b71c6'
+      ctx.fillRect(x - 13, y - 15, 26, 3)
+      ctx.fillStyle = '#ab93e2'
+      ctx.fillRect(x - 13, y - 15, 26, 1.4)
       break
-    case 'board':
+    }
+    case 'board': {
+      // a lean to notice board on two legs
       ctx.fillStyle = '#5a3f2a'
-      ctx.fillRect(x - 10, y - 13, 20, 16)
+      ctx.fillRect(x - 8, y - 2, 3, 9)
+      ctx.fillRect(x + 5, y - 2, 3, 9)
+      prism(ctx, x, y + 2, 20, 4, 14, '#8a6238', '#442f1c')
       ctx.fillStyle = '#f4ead0'
-      ctx.fillRect(x - 8, y - 11, 16, 11)
-      ctx.strokeStyle = withAlpha(C.gold, 0.95)
-      ctx.lineWidth = 1.5
-      ctx.strokeRect(x - 10, y - 13, 20, 16)
+      ctx.fillRect(x - 9, y - 13, 18, 9)
       ctx.fillStyle = '#4a3420'
       ctx.font = `bold 9px ${DISPLAY}`
       ctx.textAlign = 'center'
-      ctx.fillText('POSTED', x, y - 4)
+      ctx.fillText('POSTED', x, y - 6)
       ctx.textAlign = 'left'
       break
+    }
     case 'radio': {
       const t = performance.now() / 200
-      ctx.fillStyle = '#4a3a75'
-      ctx.fillRect(x - 9, y - 7, 18, 14)
-      ctx.strokeStyle = withAlpha(C.cyan, 0.6 + Math.sin(t) * 0.3)
-      ctx.beginPath()
-      ctx.moveTo(x + 5, y - 7)
-      ctx.lineTo(x + 11, y - 16)
-      ctx.stroke()
+      prism(ctx, x, y + 4, 20, 6, 12, '#6a55a0', '#3d2e66')
       ctx.fillStyle = withAlpha(neon, 0.95)
-      ctx.fillRect(x - 6, y - 3, 8, 4)
-      ctx.fillStyle = withAlpha(C.cyan, 0.8)
-      ctx.fillRect(x - 7, y + 1, 3, 3)
-      ctx.fillRect(x - 2, y + 1, 3, 3)
-      ctx.strokeStyle = withAlpha(C.cyan, 0.4)
+      ctx.fillRect(x - 7, y - 4, 10, 4)
+      ctx.fillStyle = withAlpha(C.cyan, 0.85)
+      ctx.fillRect(x - 8, y + 1, 3, 3)
+      ctx.fillRect(x - 3, y + 1, 3, 3)
+      ctx.strokeStyle = withAlpha(C.cyan, 0.6 + Math.sin(t) * 0.3)
       ctx.lineWidth = 1.5
-      ctx.strokeRect(x - 9, y - 7, 18, 14)
+      ctx.beginPath()
+      ctx.moveTo(x + 6, y - 8)
+      ctx.lineTo(x + 13, y - 21)
+      ctx.stroke()
       break
     }
-    case 'graffiti':
-      ctx.fillStyle = '#3f2d60'
-      ctx.fillRect(x - 12, y - 10, 24, 20)
+    case 'graffiti': {
+      // a wall stub with a tag on it
+      prism(ctx, x, y + 6, 24, 6, 12, '#5b4488', '#332552')
       ctx.strokeStyle = withAlpha(r.neon, 0.95)
       ctx.lineWidth = 2.5
       ctx.beginPath()
-      ctx.moveTo(x - 9, y + 4)
-      ctx.lineTo(x - 3, y - 4)
-      ctx.lineTo(x + 2, y + 3)
-      ctx.lineTo(x + 8, y - 5)
+      ctx.moveTo(x - 9, y + 2)
+      ctx.lineTo(x - 3, y - 5)
+      ctx.lineTo(x + 2, y + 1)
+      ctx.lineTo(x + 8, y - 6)
       ctx.stroke()
-      ctx.strokeStyle = withAlpha(C.cyan, 0.6)
-      ctx.lineWidth = 1.5
-      ctx.strokeRect(x - 12, y - 10, 24, 20)
       break
+    }
     case 'kid':
+      ctx.fillStyle = 'rgba(8, 5, 24, 0.3)'
+      ctx.beginPath()
+      ctx.ellipse(x, y + 7, 8, 3, 0, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.fillStyle = '#6b52a0'
+      ctx.fillRect(x - 5, y - 3, 10, 10)
       ctx.fillStyle = '#5a4480'
       ctx.beginPath()
-      ctx.arc(x, y, 7, 0, Math.PI * 2)
+      ctx.arc(x, y - 8, 6.5, 0, Math.PI * 2)
       ctx.fill()
       ctx.strokeStyle = withAlpha(C.gold, 0.5)
       ctx.lineWidth = 1
       ctx.stroke()
       ctx.fillStyle = withAlpha(C.gold, 0.95)
       ctx.beginPath()
-      ctx.arc(x - 2, y - 1, 1.6, 0, Math.PI * 2)
-      ctx.arc(x + 2, y - 1, 1.6, 0, Math.PI * 2)
+      ctx.arc(x - 2, y - 9, 1.6, 0, Math.PI * 2)
+      ctx.arc(x + 2, y - 9, 1.6, 0, Math.PI * 2)
       ctx.fill()
       break
   }
 }
 
-function drawGuard(
-  ctx: CanvasRenderingContext2D,
-  gd: { x: number; y: number; state: string; alert: number; dir: number },
-  r: Region,
-) {
-  const chasing = gd.state === 'chase'
-  const color = chasing ? C.bad : gd.alert > 0.4 ? C.warn : '#e8e2ff'
-  ctx.save()
-  ctx.shadowColor = chasing ? C.bad : withAlpha(r.neon2, 0.85)
-  ctx.shadowBlur = chasing ? 14 : 9
-  // dark backing so the little torch-bearer reads on bright pavement
-  ctx.fillStyle = 'rgba(12, 8, 30, 0.55)'
-  ctx.beginPath()
-  ctx.arc(gd.x, gd.y, 7.5, 0, Math.PI * 2)
-  ctx.fill()
-  ctx.strokeStyle = color
-  ctx.lineWidth = 2
-  ctx.beginPath()
-  ctx.arc(gd.x, gd.y, 6, 0, Math.PI * 2)
-  ctx.stroke()
-  ctx.beginPath()
-  ctx.moveTo(gd.x, gd.y + 6)
-  ctx.lineTo(gd.x, gd.y + 14)
-  ctx.stroke()
-  ctx.fillStyle = chasing ? C.bad : '#7c8fd6'
-  ctx.fillRect(gd.x - 5, gd.y - 10, 10, 3)
-  ctx.restore()
+/** one uniform per tier: light patrols at the fence line, plated enforcers east */
+type GuardArt = {
+  coat: string
+  coatLit: string
+  plate: string
+  trim: string
+  visor: string
+  boot: string
+}
 
-  // torch line showing facing
-  ctx.strokeStyle = withAlpha(color, 0.5)
+const GUARD_ART: GuardArt[] = [
+  { coat: '#c9d3f2', coatLit: '#e8edff', plate: '#98a5d4', trim: '#7cf0ff', visor: '#8ff0ff', boot: '#3a3f60' },
+  { coat: '#93a2d8', coatLit: '#b8c4f0', plate: '#6f7cb4', trim: '#6cc8ff', visor: '#7ce0ff', boot: '#31374f' },
+  { coat: '#6b74a8', coatLit: '#8f98cb', plate: '#4d5680', trim: '#ffd24a', visor: '#ffd24a', boot: '#262b42' },
+  { coat: '#4f5480', coatLit: '#7075a6', plate: '#383d61', trim: '#ff9a3c', visor: '#ff9a3c', boot: '#1d2036' },
+  { coat: '#3d2b40', coatLit: '#5b4360', plate: '#281b2c', trim: '#ff5470', visor: '#ff6a84', boot: '#140d20' },
+]
+
+/**
+ * Guards are people, not pips: boots, a plated coat, a helmeted visor and rank
+ * ticks, all sized and coloured by tier, so a Borderlands enforcer is visibly
+ * heavier than a Fringe patrol before it ever sees you. Captains add gold.
+ */
+function drawGuard(ctx: CanvasRenderingContext2D, gd: Guard, r: Region) {
+  const chasing = gd.state === 'chase'
+  const uneasy = !chasing && gd.alert > 0.4
+  const art = GUARD_ART[Math.max(0, Math.min(GUARD_ART.length - 1, gd.tier))]
+  // every tier stands taller and wider, and a captain a step further again
+  const s = 1 + gd.tier * 0.07 + (gd.captain ? 0.07 : 0)
+  const standing = gd.state === 'search' || gd.state === 'suspicious'
+  const step = standing ? 0 : Math.sin(performance.now() / 170 + gd.id * 1.9)
+  const glow = chasing ? C.bad : uneasy ? C.warn : art.visor
+
+  const feet = gd.y + 9 * s
+  const hip = feet - 6.5 * s
+  const shoulder = hip - 7 * s
+  const headY = shoulder - 3.4 * s
+
+  ctx.save()
+
+  // state glow on the ground, so a hunting guard still reads from across the street
+  const halo = ctx.createRadialGradient(gd.x, hip, 2, gd.x, hip, 20 * s)
+  halo.addColorStop(0, withAlpha(glow, chasing ? 0.34 : 0.16))
+  halo.addColorStop(1, withAlpha(glow, 0))
+  ctx.fillStyle = halo
+  ctx.beginPath()
+  ctx.arc(gd.x, hip, 20 * s, 0, Math.PI * 2)
+  ctx.fill()
+
+  ctx.fillStyle = 'rgba(8, 5, 22, 0.45)'
+  ctx.beginPath()
+  ctx.ellipse(gd.x, feet + 1, 9.5 * s, 3.4 * s, 0, 0, Math.PI * 2)
+  ctx.fill()
+
+  // boots, alternating with the stride
+  ctx.fillStyle = art.boot
+  ctx.fillRect(gd.x - 5.4 * s, hip + Math.abs(step) * 1.4 * s, 4.6 * s, 6.5 * s)
+  ctx.fillRect(gd.x + 0.8 * s, hip - Math.abs(step) * 1.4 * s, 4.6 * s, 6.5 * s)
+
+  // tapered coat with a lit side, so the body is not a flat rectangle
+  ctx.fillStyle = art.coat
+  ctx.beginPath()
+  ctx.moveTo(gd.x - 4.6 * s, shoulder)
+  ctx.lineTo(gd.x + 4.6 * s, shoulder)
+  ctx.lineTo(gd.x + 6.3 * s, hip + 1.4 * s)
+  ctx.lineTo(gd.x - 6.3 * s, hip + 1.4 * s)
+  ctx.closePath()
+  ctx.fill()
+  ctx.fillStyle = art.coatLit
+  ctx.fillRect(gd.x - 4.3 * s, shoulder, 2.6 * s, hip - shoulder)
+  ctx.fillStyle = 'rgba(10, 6, 26, 0.35)'
+  ctx.fillRect(gd.x + 4.2 * s, shoulder, 1.6 * s, hip - shoulder)
+
+  // shoulder plates, gold on a captain
+  ctx.fillStyle = art.plate
+  ctx.fillRect(gd.x - 7.5 * s, shoulder - 1.6 * s, 3.6 * s, 3.4 * s)
+  ctx.fillRect(gd.x + 3.9 * s, shoulder - 1.6 * s, 3.6 * s, 3.4 * s)
+  if (gd.captain) {
+    ctx.fillStyle = C.gold
+    ctx.fillRect(gd.x - 7.5 * s, shoulder - 2.8 * s, 3.6 * s, 1.4 * s)
+    ctx.fillRect(gd.x + 3.9 * s, shoulder - 2.8 * s, 3.6 * s, 1.4 * s)
+  }
+
+  // chest lamp: the better equipped tiers carry one
+  if (gd.tier >= 1) {
+    ctx.fillStyle = withAlpha(art.visor, 0.9)
+    ctx.fillRect(gd.x - 1.2 * s, shoulder + 2.4 * s, 2.4 * s, 2.4 * s)
+  }
+
+  // a rim of the region's own neon, so a guard belongs to the street it walks
+  ctx.strokeStyle = withAlpha(r.neon2, 0.45)
   ctx.lineWidth = 1
   ctx.beginPath()
-  ctx.moveTo(gd.x, gd.y - 4)
-  ctx.lineTo(gd.x + Math.cos(gd.dir) * 12, gd.y - 4 + Math.sin(gd.dir) * 12)
+  ctx.moveTo(gd.x - 6.3 * s, hip + 1.4 * s)
+  ctx.lineTo(gd.x - 4.6 * s, shoulder)
+  ctx.stroke()
+
+  // helmet dome, visor slit and rank ticks along the brow
+  ctx.fillStyle = art.plate
+  ctx.beginPath()
+  ctx.arc(gd.x, headY, 4.7 * s, Math.PI, Math.PI * 2)
+  ctx.fill()
+  ctx.fillRect(gd.x - 4.7 * s, headY - 0.6 * s, 9.4 * s, 3.4 * s)
+  ctx.fillStyle = glow
+  ctx.shadowColor = glow
+  ctx.shadowBlur = chasing ? 12 : 7
+  ctx.fillRect(gd.x - 3.4 * s, headY + 0.1 * s, 6.8 * s, 1.9 * s)
+  ctx.shadowBlur = 0
+  ctx.fillStyle = gd.captain ? C.gold : art.trim
+  for (let i = 0; i < gd.tier; i++) ctx.fillRect(gd.x - 3 * s + i * 2.2 * s, headY - 4.6 * s, 1.3 * s, 1.3 * s)
+
+  // captain's plume
+  if (gd.captain) {
+    ctx.fillStyle = C.gold
+    ctx.fillRect(gd.x - 1.1 * s, headY - 7.6 * s, 2.2 * s, 3.4 * s)
+  }
+  ctx.restore()
+
+  // the way they are facing
+  ctx.strokeStyle = withAlpha(glow, 0.5)
+  ctx.lineWidth = 1
+  ctx.beginPath()
+  ctx.moveTo(gd.x + Math.cos(gd.dir) * 6, hip + Math.sin(gd.dir) * 6)
+  ctx.lineTo(gd.x + Math.cos(gd.dir) * 15, hip + Math.sin(gd.dir) * 15)
   ctx.stroke()
 }
 
@@ -755,6 +1152,67 @@ function drawVignette(ctx: CanvasRenderingContext2D, viewW: number, viewH: numbe
 
 /* ---------------------------------------------------------------- */
 
+/**
+ * A raised box: the front face is `h` tall and sits on `frontY`, and the top
+ * face (w by depth) sits directly above it. Drawing the front first and the top
+ * second is all the perspective this projection needs.
+ */
+function prism(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  frontY: number,
+  w: number,
+  depth: number,
+  h: number,
+  top: string,
+  side: string,
+) {
+  const x = cx - w / 2
+  const faceY = frontY - h
+  ctx.fillStyle = side
+  ctx.fillRect(x, faceY, w, h)
+  ctx.fillStyle = top
+  ctx.fillRect(x, faceY - depth, w, depth)
+  // bright seam where the two faces meet, so the corner reads
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.16)'
+  ctx.fillRect(x, faceY - 1, w, 1)
+}
+
+/**
+ * The entrance steps of a building: a fan of treads spilling out of the
+ * doorway onto the pavement, widest at the bottom so the flight reads as stairs.
+ */
+function drawSteps(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  baseY: number,
+  steps: number,
+  dark: string,
+  light: string,
+) {
+  for (let i = 0; i < steps; i++) {
+    // widest at the bottom, so the flight fans out of the doorway
+    const w = 22 + i * 5
+    const y = baseY + i * 4
+    ctx.fillStyle = i % 2 === 0 ? dark : light
+    ctx.fillRect(cx - w / 2, y, w, 4)
+    // the nosing of each tread catches the light, the riser below it is shadow
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)'
+    ctx.fillRect(cx - w / 2, y, w, 1.5)
+    ctx.fillStyle = 'rgba(4, 2, 14, 0.5)'
+    ctx.fillRect(cx - w / 2, y + 3.2, w, 0.8)
+  }
+}
+
+/** deterministic 0..1 noise per tile, so the detail never flickers between frames */
+function tileHash(x: number, y: number): number {
+  let h = Math.imul(x + 0x9e37, 0x85ebca6b) ^ Math.imul(y + 0x51ed, 0xc2b2ae35)
+  h ^= h >>> 15
+  h = Math.imul(h, 0x2545f491)
+  h ^= h >>> 13
+  return (h >>> 0) / 4294967296
+}
+
 function ring(ctx: CanvasRenderingContext2D, x: number, y: number, radius: number, color: string, alpha: number) {
   ctx.save()
   ctx.strokeStyle = withAlpha(color, alpha)
@@ -774,6 +1232,22 @@ function withAlpha(hex: string, a: number): string {
 
 function lighten(hex: string, amt: number): string {
   return shift(hex, amt)
+}
+
+/** the shadowed side of a surface: the same hue, darker */
+function shade(hex: string, amt: number): string {
+  return shift(hex, -amt)
+}
+
+/** pull a colour toward grey, so pavements read as stone and not as road */
+function desaturate(hex: string, amount: number): string {
+  const n = parseInt(hex.slice(1), 16)
+  const r = (n >> 16) & 0xff
+  const g = (n >> 8) & 0xff
+  const b = n & 0xff
+  const grey = (r + g + b) / 3
+  const f = (c: number) => Math.round(c + (grey - c) * amount)
+  return `#${((f(r) << 16) | (f(g) << 8) | f(b)).toString(16).padStart(6, '0')}`
 }
 
 function shift(hex: string, amt: number): string {

@@ -70,6 +70,10 @@ export interface Guard {
   y: number
   path: Vec[]
   wp: number
+  /** 0..4 — one step per region: what the patrol can do AND what it looks like */
+  tier: number
+  /** the one guard in a handful that wears captain colours and hits harder */
+  captain: boolean
   speed: number
   state: 'patrol' | 'suspicious' | 'chase' | 'search' | 'return'
   alert: number // 0..1

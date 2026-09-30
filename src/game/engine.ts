@@ -1,6 +1,15 @@
-import { CITIES_PER_REGION, TS, clueAssist, generateCity, REGIONS, regionIndexForCity } from './city'
+import {
+  CITIES_PER_REGION,
+  TS,
+  clueAssist,
+  generateCity,
+  guardRankName,
+  REGIONS,
+  regionIndexForCity,
+} from './city'
 import { DEFAULT_SKIN_ID } from './brand'
 import { saveProfile, type Profile, type RunState } from './profile'
+import { recordCityTime, recordRun } from './records'
 import { RNG } from './rng'
 import type { CharacterPose, Guard, PlayerState, Prop, Puzzle, Toast, World } from './types'
 
@@ -45,6 +54,8 @@ export interface Snapshot {
   totalDays: number
   nearSafehouse: boolean
   guardsAlerted: number
+  /** who is on your heels right now, by rank or by count ('' when clear) */
+  chasedBy: string
   /** avatar skin id (brand.ts registry) */
   skin: string
   regionId: string
@@ -62,6 +73,10 @@ export interface Snapshot {
   /** hint revealed after repeated wrong answers on the open puzzle */
   puzzleNudge: string | null
   playerName: string
+  /** stopwatch for the city being played, in seconds */
+  cityTimeSec: number
+  /** stopwatch for the whole session, in seconds */
+  runTimeSec: number
   /**
    * Signal tracker on the next clue. Only present in the first few cities and for
    * the first two clues of a chain — after that the riddles are all you get.
@@ -80,6 +95,39 @@ export interface GameOptions {
 
 /** how often mid-run state is flushed to the profile, in seconds */
 const AUTOSAVE_INTERVAL = 10
+
+/**
+ * A city day is a full 24 hour clock that opens at 6am: `frac` 0 is sunrise,
+ * 0.5 is 6pm, 0.75 is midnight and 1.0 wraps back round to sunrise. The light
+ * therefore starts at full sun and falls away through the afternoon into night,
+ * then lifts again just before the next morning so the loop has no hard cut.
+ */
+export const DAY_START_HOUR = 6
+
+/** widest the night wash ever gets (see render.ts) */
+export const MAX_DARKNESS = 0.5
+
+/**
+ * The single source of truth for how light it is. render.ts paints from
+ * `darkness`; guards sharpen their senses from `night`. Keeping both in one
+ * function means the picture and the stealth rules can never disagree.
+ */
+export function dayLight(frac: number): { darkness: number; night: boolean } {
+  const f = Math.min(1, Math.max(0, frac))
+  let darkness: number
+  if (f < 0.5) darkness = 0 // 06:00 to 18:00, full sun
+  else if (f < 0.75) darkness = MAX_DARKNESS * ((f - 0.5) / 0.25) // dusk, 18:00 to midnight
+  else if (f < 0.875) darkness = MAX_DARKNESS // the small hours
+  else darkness = MAX_DARKNESS * (1 - (f - 0.875) / 0.125) // dawn climb back to sunrise
+  // guards get sharper once the street is genuinely dim, not at the first hint of dusk
+  return { darkness, night: darkness >= 0.3 }
+}
+
+/** clock hour (0 to 23) for a day fraction, so the HUD agrees with the light */
+export function dayHour(frac: number): number {
+  const f = Math.min(1, Math.max(0, frac))
+  return Math.floor((DAY_START_HOUR + f * 24) % 24)
+}
 
 /**
  * Coaching for an open puzzle, based on how many times the player has missed.
@@ -126,6 +174,11 @@ export class Game {
   toasts: Toast[] = []
   private toastId = 1
   promptText: string | null = null
+  /** live stopwatch for the city being played, and for the whole session run */
+  cityTimeSec = 0
+  runTimeSec = 0
+  /** cities finished since this engine was created (a full run needs 100) */
+  private clearedThisSession = 0
   caughtTimer = 0
   deathReason = ''
   private keys = new Set<string>()
@@ -320,6 +373,11 @@ export class Game {
 
     // profile bookkeeping + periodic autosave
     if (this.profile) this.profile.stats.timePlayedSec += dt
+    // the ranking stopwatches only run while the player is actually playing:
+    // menus, dialogs, puzzles and overlays are excluded because update() bails
+    // out early for every non playing status
+    this.cityTimeSec += dt
+    this.runTimeSec += dt
     this.saveAccum += dt
     if (this.saveAccum >= AUTOSAVE_INTERVAL) {
       this.saveAccum = 0
@@ -495,7 +553,7 @@ export class Game {
 
       if (gd.alert >= 1 && gd.state !== 'chase') {
         gd.state = 'chase'
-        this.toast('A guard spotted you!', 'bad')
+        this.toast(`A ${guardRankName(gd)} spotted you!`, 'bad')
       }
 
       switch (gd.state) {
@@ -641,8 +699,11 @@ export class Game {
     this.player.coins -= fine
     this.player.hunger = Math.max(0, this.player.hunger - 15)
     this.player.thirst = Math.max(0, this.player.thirst - 15)
+    const rank = guardRankName(gd)
     this.toast(
-      `Caught! They took ${fine} $DLI${lostFood ? ' and your food' : ''}. Back to the checkpoint.`,
+      fine > 0
+        ? `The ${rank} caught you and took ${fine} $DLI${lostFood ? ' plus your food' : ''}. Back to the checkpoint.`
+        : `The ${rank} caught you${lostFood ? ' and took your food' : ''}. Back to the checkpoint.`,
       'bad',
     )
   }
@@ -905,16 +966,17 @@ export class Game {
       this.toast('Find a bench or a safe corner to sleep.', 'info')
       return
     }
-    // sleep: advance to morning, restore some health, drain stats a bit
+    // sleep: advance to the next sunrise (day fraction 0), restore some health,
+    // drain stats a bit. Time still passes, so the ranking stopwatch keeps going.
     const daySecs = this.world.dayLengthSec
     const elapsed = this.timeSec
-    const toMorning = daySecs - elapsed + daySecs * 0.25
+    const toMorning = daySecs - elapsed
     const hours = (toMorning / daySecs) * 24
     const p = this.player
     p.hunger = Math.max(0, p.hunger - hours * this.world.drainPerHour.hunger)
     p.thirst = Math.max(0, p.thirst - hours * this.world.drainPerHour.thirst)
     p.health = Math.min(100, p.health + 25)
-    this.timeSec = daySecs * 0.25
+    this.timeSec = 0
     this.day++
     this.daysInCity++
     this.totalDays++
@@ -1075,6 +1137,8 @@ export class Game {
     this.status = 'playing'
     this.day = 1
     this.daysInCity = 1
+    // a death restarts the level, so its stopwatch starts over too
+    this.cityTimeSec = 0
     this.player = this.makePlayer()
     for (const gd of this.world.guards) {
       gd.state = 'patrol'
@@ -1096,9 +1160,16 @@ export class Game {
     const cleared = this.world.city
     const next = cleared + 1
     if (this.profile) this.profile.stats.citiesCleared++
+    // bank the level timer for the ranking board before the stopwatch resets
+    recordCityTime(cleared, this.cityTimeSec)
+    this.clearedThisSession++
+    this.cityTimeSec = 0
 
     if (next > 100) {
       if (cleared % CITIES_PER_REGION === 0) this.unlockRegionLore(regionIndexForCity(cleared), true)
+      // only a run taken from City 1 to City 100 in one sitting counts as a
+      // full run record; resuming halfway cannot produce an honest total
+      if (this.clearedThisSession >= 100) recordRun(this.runTimeSec)
       this.status = 'victory'
       this.checkpoint()
       return
@@ -1138,8 +1209,7 @@ export class Game {
   }
 
   isNight(): boolean {
-    const frac = this.timeSec / this.world.dayLengthSec
-    return frac > 0.75 || frac < 0.1
+    return dayLight(this.timeSec / this.world.dayLengthSec).night
   }
 
   private emitThrottled() {
@@ -1149,7 +1219,9 @@ export class Game {
   }
 
   getSnapshot(): Snapshot {
-    const hour = Math.floor((this.timeSec / this.world.dayLengthSec) * 24)
+    const frac = this.timeSec / this.world.dayLengthSec
+    const hour = dayHour(frac)
+    const chasing = this.world.guards.filter((g) => g.state === 'chase')
     return {
       status: this.status,
       city: this.world.city,
@@ -1176,7 +1248,13 @@ export class Game {
       deaths: this.deaths,
       totalDays: this.totalDays,
       nearSafehouse: this.nearSafehouse,
-      guardsAlerted: this.world.guards.filter((g) => g.state === 'chase').length,
+      guardsAlerted: chasing.length,
+      chasedBy:
+        chasing.length === 0
+          ? ''
+          : chasing.length === 1
+            ? `the ${guardRankName(chasing[0])}`
+            : `${chasing.length} guards`,
       skin: this.skinId,
       regionId: this.world.region.id,
       regionIndex: regionIndexForCity(this.world.city),
@@ -1190,6 +1268,8 @@ export class Game {
       puzzleNudge: this.activePuzzle?.nudge ?? null,
       playerName: this.profile?.name ?? 'Runner',
       clueTrack: this.clueTrack(),
+      cityTimeSec: this.cityTimeSec,
+      runTimeSec: this.runTimeSec,
     }
   }
 

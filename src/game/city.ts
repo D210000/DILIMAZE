@@ -151,33 +151,75 @@ function landmarkName(kind: PropKind | 'border gate'): string {
   return kind === 'border gate' ? 'border gate' : LANDMARK_NAME[kind] ?? kind
 }
 
+/*
+ * The locator line is the sentence the player reads on every single clue, so it
+ * is built from three rotating parts (how far, which slice of the map, which
+ * sentence shape) instead of one fixed template. A city runs long, and the next
+ * city moves on again, so the same wording rarely shows up twice.
+ */
+
+const BAND_NEAR = ['Right on top of you', 'On your doorstep', 'Close enough to hear it']
+const BAND_SHORT = ['A couple of streets away', 'Two or three turns away', 'A short walk at most']
+const BAND_FAIR = ['A fair walk', 'A fair walk across a few streets', 'Halfway across the city', 'A long walk']
+const BAND_FAR = ['Clear across the city', 'Far across the city', 'All the way on the far side']
+
 /** never an exact distance — just "how far" in words */
-function proximityBand(from: Vec, to: Vec): string {
+function proximityBand(from: Vec, to: Vec, rng: RNG): string {
   const d = Math.hypot(to.x - from.x, to.y - from.y)
-  if (d < 7) return 'Right on top of you'
-  if (d < 16) return 'A couple of streets away'
-  if (d < 30) return 'A fair walk'
-  return 'Clear across the city'
+  if (d < 7) return rng.pick(BAND_NEAR)
+  if (d < 16) return rng.pick(BAND_SHORT)
+  if (d < 30) return rng.pick(BAND_FAIR)
+  return rng.pick(BAND_FAR)
 }
 
 /** which slice of the map a point sits in — the coarse "where do I look" anchor */
-function quarterOf(x: number, y: number, w: number, h: number): string {
+function quarterOf(x: number, y: number, w: number, h: number, rng: RNG): string {
   const ew = x < w / 3 ? 'west' : x > (w * 2) / 3 ? 'east' : ''
   const ns = y < h / 3 ? 'north' : y > (h * 2) / 3 ? 'south' : ''
-  if (ns && ew) return `the ${ns}${ew} of the city`
-  if (ns) return `the ${ns} side of the city`
-  if (ew) return `the ${ew} side of the city`
-  return 'the dead centre of the city'
+  if (ns && ew)
+    return rng.pick([
+      `the ${ns}${ew} of the city`,
+      `the ${ns}${ew} corner of the city`,
+      `the ${ns}${ew} quarter`,
+    ])
+  if (ns) return rng.pick([`the ${ns} side of the city`, `the ${ns} end of the city`, `the far ${ns}`])
+  if (ew) return rng.pick([`the ${ew} side of the city`, `the ${ew} end of the city`, `the far ${ew}`])
+  return rng.pick(['the dead centre of the city', 'the middle of the city', 'the centre of the city'])
 }
+
+/** the sentence shapes the locator can take: band + landmark + quarter */
+const HINT_SHAPES: Array<(landmark: string, band: string, quarter: string) => string> = [
+  (l, b, q) => `Hint: ${b}. The ${l} waits in ${q}.`,
+  (l, b, q) => `Hint: ${b}, and the ${l} sits in ${q}.`,
+  (l, b, q) => `Hint: the ${l} is in ${q}, ${b.toLowerCase()}.`,
+  (l, b, q) => `Hint: ${q}. The ${l} is ${b.toLowerCase()}.`,
+  (l, b, q) => `Next lead: ${q}, ${b.toLowerCase()} from here. Look for the ${l}.`,
+]
 
 /**
  * The plain-language locator handed to the player with every clue. The riddle
  * names the landmark; this says roughly where to walk so a City-40 chain is
  * findable without an arrow. Deliberately coarse — no exact block counts.
  */
-function locatorHint(from: Vec, to: Vec, w: number, h: number, kind: PropKind | 'border gate'): string {
-  return `Hint: ${proximityBand(from, to)}. The ${landmarkName(kind)} waits in ${quarterOf(to.x, to.y, w, h)}.`
+function locatorHint(
+  from: Vec,
+  to: Vec,
+  w: number,
+  h: number,
+  kind: PropKind | 'border gate',
+  rng: RNG,
+): string {
+  const band = proximityBand(from, to, rng)
+  const quarter = quarterOf(to.x, to.y, w, h, rng)
+  return rng.pick(HINT_SHAPES)(landmarkName(kind), band, quarter)
 }
+
+/** the opener for the pre-chain line, so City 1 and City 90 do not read alike */
+const ENTRY_SHAPES: Array<(landmark: string, band: string, quarter: string) => string> = [
+  (l, b, q) => `First lead: ${b}. The ${l} waits in ${q}.`,
+  (l, b, q) => `First lead: ${q}. The ${l} is ${b.toLowerCase()}.`,
+  (l, b, q) => `First lead: ${b}, in ${q}. Look for the ${l}.`,
+]
 
 /* ------------------------------------------------------------------ */
 /* solvability guarantee                                               */
@@ -342,25 +384,144 @@ export function ensureSolvable(world: World): number {
   return cleared
 }
 
-// More guards, wider cones, faster later
-function guardSpec(city: number, rng: RNG): { n: number; dist: number; half: number; speed: number } {
-  const n = Math.min(10, 2 + Math.floor(city / 12) + rng.int(0, 1))
-  const dist = Math.min(9.5, 4.5 + city * 0.05)
-  const half = Math.min(0.62, 0.42 + city * 0.002)
-  const speed = Math.min(2.6, 1.35 + city * 0.012)
-  return { n, dist, half, speed }
+/*
+ * Guards climb one tier per region: a City 1 patrol is a light figure with a
+ * short stare, a Lockdown enforcer is plated, quick and sees most of a street.
+ * The tier is shared with the renderer, so the strength of a patrol and the way
+ * it looks are always the same number.
+ */
+export const GUARD_TIERS = 5
+export const GUARD_RANKS = ['patrol', 'sentry', 'warden', 'marshal', 'enforcer'] as const
+
+export function guardTier(city: number): number {
+  return Math.min(GUARD_TIERS - 1, regionIndexForCity(city))
 }
 
-const RIDDLES: Array<(next: string, gate: string) => string> = [
-  (n) => `The next word waits at ${n}.`,
-  (n) => `Ask ${n}. They saw the courier pass.`,
-  (n) => `Rumor says the stamp hides near ${n}.`,
+/** the word the toasts and the manual use for a given guard */
+export function guardRankName(gd: { tier: number; captain: boolean }): string {
+  if (gd.captain) return 'captain'
+  return GUARD_RANKS[Math.max(0, Math.min(GUARD_TIERS - 1, gd.tier))]
+}
+
+// More guards, wider cones and longer legs the further east you get. At City 1 a
+// guard is slower than a walking runner; by the Borderlands a chase has to be
+// answered with a sprint or a hiding spot.
+function guardSpec(
+  city: number,
+  rng: RNG,
+): { n: number; dist: number; half: number; speed: number; tier: number } {
+  const n = Math.min(10, 2 + Math.floor(city / 12) + rng.int(0, 1))
+  const dist = Math.min(10, 4.4 + city * 0.056)
+  const half = Math.min(0.66, 0.4 + city * 0.0026)
+  const speed = Math.min(3.2, 1.3 + city * 0.019)
+  return { n, dist, half, speed, tier: guardTier(city) }
+}
+
+/*
+ * Riddles. A city deals them out like cards, one per clue, so a chain never
+ * says the same thing twice, and the deck is rotated by 17 per city, which is
+ * wider than the longest chain, so two cities in a row cannot share a line
+ * either. The shapes below are then filled from slot pools, so even a shape a
+ * player has met before reads differently the next time it comes round.
+ */
+type RiddleShape = (next: string, gate: string, t: RNG) => string
+
+const NEXT_THING = [
+  'the next word',
+  'the next line',
+  'the next name',
+  'the next lead',
+  'the next slip of paper',
+  'the next number',
+]
+const CARRIER = [
+  'the courier',
+  'the runner',
+  'the night driver',
+  'the woman from the docks',
+  'the man with the case',
+  'the kid on the bike',
+]
+const STAMP = ['the stamp', 'the mark', 'the seal', 'the border pass', 'the ledger', 'the token']
+
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
+
+const RIDDLE_POOL: RiddleShape[] = [
+  // shapes that set up the handover
   (n) => `Nothing is written down. Only ${n} remembers the next line.`,
+  (n) => `Nobody at ${n} talks to strangers. Somebody there did once.`,
   (n, g) => `Follow the chain to ${n}... and when the chain ends, ${g} opens.`,
+  (n) => `Whoever runs this city wrote the trail down at ${n}.`,
+  (n) => `Two names left town this week. One of them was at ${n}.`,
+  (n) => `The next line was spoken, not written, and it was spoken at ${n}.`,
+  (n) => `Ask about the night bus at ${n}.`,
+  (n) => `${n} holds the third letter, not the first.`,
+  (n) => `They redraw these streets every season. ${n} never moves.`,
+  (n) => `Do not knock. Wait at ${n}.`,
+  (n) => `After dark the signal repeats from ${n}.`,
+  (n) => `The chain is short and it runs through ${n}.`,
+  (n) => `Somebody paid to have ${n} forgotten. Almost worked.`,
+  (n) => `Write nothing down. Read everything at ${n}.`,
+  (n) => `${n} is the only door that is still open tonight.`,
+  (n) => `The last runner marked their name at ${n}.`,
+  (n) => `Count the lights on the way to ${n}.`,
+  (n) => `Whatever you were told in the last city, it ends up at ${n}.`,
+  // slot shapes, filled from the pools above
+  (n, _g, t) => `${cap(t.pick(NEXT_THING))} waits at ${n}.`,
+  (n, _g, t) => `Ask ${n}. They saw ${t.pick(CARRIER)} pass.`,
+  (n, _g, t) => `Rumor says ${t.pick(STAMP)} hides near ${n}.`,
+  (n, _g, t) => `${n} keeps ${t.pick(NEXT_THING)} under the counter.`,
+  (n, _g, t) => `${cap(t.pick(CARRIER))} stopped at ${n} and never came out.`,
+  (n, _g, t) => `Painted over twice, and ${n} still carries ${t.pick(STAMP)}.`,
+  (n, _g, t) => `${cap(t.pick(STAMP))} changed hands at ${n}.`,
+  (n, _g, t) => `Ask about ${t.pick(CARRIER)} at ${n}.`,
+  (n, _g, t) => `Only ${n} will say ${t.pick(NEXT_THING)} out loud.`,
+  (n, _g, t) => `Wait at ${n} until ${t.pick(CARRIER)} passes.`,
+  (n, _g, t) => `${cap(t.pick(STAMP))} was last seen at ${n}.`,
+  (n, _g, t) => `${n} is where the trail bends. ${cap(t.pick(STAMP))} goes with it.`,
+  (n, _g, t) => `Two streets past the noise, ${n} keeps ${t.pick(STAMP)}.`,
+  (n, g, t) => `${cap(t.pick(STAMP))} left ${n} heading for ${g}, and ${g} does not open for free.`,
+  (n, _g, t) => `${n} is where ${t.pick(CARRIER)} dropped ${t.pick(NEXT_THING)}.`,
+  (n, _g, t) => `Follow ${t.pick(CARRIER)} as far as ${n}. Then stop.`,
+  // two slot shapes: the same line reads differently for a long while yet
+  (n, _g, t) => `${cap(t.pick(CARRIER))} carried ${t.pick(STAMP)} through ${n} last night.`,
+  (n, _g, t) => `Ask for ${t.pick(CARRIER)} at ${n}, then ask about ${t.pick(NEXT_THING)}.`,
+  (n, _g, t) => `${cap(t.pick(STAMP))} and ${t.pick(NEXT_THING)} were both left at ${n}.`,
+  (n, _g, t) => `${n} saw ${t.pick(CARRIER)} and kept ${t.pick(STAMP)}.`,
+  (n, _g, t) => `${cap(t.pick(NEXT_THING))} came through ${n} with ${t.pick(STAMP)}.`,
+  (n, g, t) => `${cap(t.pick(CARRIER))} left ${t.pick(STAMP)} at ${n} and went on to ${g}.`,
+]
+
+/** how far the deck turns between one city and the next */
+const RIDDLE_STEP = 17
+
+/**
+ * Riddles may call a landmark by one of a few names, so a shape the player has
+ * met before still reads as a new sentence. The locator hint keeps the plain
+ * name, so the two lines still obviously point at the same thing.
+ */
+const LANDMARK_ASIDES: Partial<Record<PropKind, string[]>> = {
+  board: ['the notice board', 'the board', 'the posting board'],
+  bar: ['the bar', 'the back bar', 'the corner bar'],
+  kid: ['the kid', 'the local kid', 'the kid on the bike'],
+  radio: ['the radio', 'the old radio', 'the radio set'],
+  graffiti: ['the graffiti wall', 'the painted wall', 'the tagged wall'],
+}
+
+/** the closing riddle, worded a few ways so the last link does not read the same */
+const GATE_RIDDLES: Array<(gate: string) => string> = [
+  (g) => `End of the trail: ${g} sits on the east edge of the city. The stamp opens it.`,
+  (g) => `The chain stops at ${g}, on the east edge. Only the stamp opens it.`,
+  (g) => `Last line: ${g}, east edge of the city. Show the stamp and it opens.`,
+  (g) => `Everything above this line was the walk. ${g} is the door, east edge, stamp only.`,
+  (g) => `The trail ends where the city does: ${g}, east side. Bring the stamp.`,
 ]
 
 export function generateCity(city: number, opts: { skipSolvabilityGuard?: boolean } = {}): World {
   const rng = new RNG(city * 7919 + 13)
+  // Wording draws from its own stream: riddles and hints are not entangled with
+  // the map, prop and patrol draws, so the copy can be reworded on its own.
+  const text = new RNG(city * 104729 + 7)
   const region = regionForCity(city)
   const { w, h } = mapSize(city)
   /** west-edge entry row === east-edge exit row */
@@ -662,6 +823,10 @@ export function generateCity(city: number, opts: { skipSolvabilityGuard?: boolea
   // Only the assisted opening clues say which way and how far — but every clue
   // also carries a plain-language locator, so a 9-link chain stays findable.
   const gateName = 'the border gate'
+  // deal the riddle shapes out like cards: the deck turns by RIDDLE_STEP each
+  // city, which is wider than the longest chain, so no line repeats inside a
+  // city and no two cities in a row share one either
+  const riddleAt = (i: number) => RIDDLE_POOL[(city * RIDDLE_STEP + i) % RIDDLE_POOL.length]
   for (let i = 0; i < clues.length; i++) {
     const from: Vec = i === 0 ? spawn : { x: clues[i - 1].x / TS, y: clues[i - 1].y / TS }
     const nextClue = i + 1 < clues.length ? clues[i + 1] : null
@@ -670,22 +835,28 @@ export function generateCity(city: number, opts: { skipSolvabilityGuard?: boolea
       : 'border gate'
     const target: Vec = nextClue ? { x: nextClue.x / TS, y: nextClue.y / TS } : { x: w - 1, y: gateY + 0.5 }
     if (!nextClue) {
-      // the last lead is the gate itself, which deserves its own line
-      clues[i].riddle = `End of the trail: ${gateName} sits on the east edge of the city. The stamp opens it.`
+      // the last lead is the gate itself, which deserves its own line, and the
+      // wording turns with the city so neighbours never end on the same note
+      clues[i].riddle = GATE_RIDDLES[city % GATE_RIDDLES.length](gateName)
     } else {
+      const aside = kind === 'border gate' ? `the ${landmarkName(kind)}` : text.pick(LANDMARK_ASIDES[kind] ?? [`the ${landmarkName(kind)}`])
       const landmark = clueAssist(city, i + 1)
-        ? `the ${landmarkName(kind)} (${describeDirection(from, target)})`
-        : `the ${landmarkName(kind)}`
-      clues[i].riddle = rng.pick(RIDDLES)(landmark, gateName)
+        ? `${aside} (${describeDirection(from, target)})`
+        : aside
+      clues[i].riddle = riddleAt(i)(landmark, gateName, text)
     }
-    clues[i].hint = locatorHint(from, target, w, h, kind)
+    clues[i].hint = locatorHint(from, target, w, h, kind, text)
   }
 
   // where the very first clue is, for the scrambled-signal stretch at the start
   const firstClue = clues[0]
   const firstKind = firstClue ? props.find((p) => p.id === firstClue.propId)?.kind ?? 'board' : 'board'
   const entryHint = firstClue
-    ? `First lead: ${proximityBand(spawn, { x: firstClue.x / TS, y: firstClue.y / TS })}. The ${landmarkName(firstKind)} waits in ${quarterOf(firstClue.x / TS, firstClue.y / TS, w, h)}.`
+    ? text.pick(ENTRY_SHAPES)(
+        landmarkName(firstKind),
+        proximityBand(spawn, { x: firstClue.x / TS, y: firstClue.y / TS }, text),
+        quarterOf(firstClue.x / TS, firstClue.y / TS, w, h, text),
+      )
     : ''
 
   // puzzles start appearing from city 4, one per extra clue
@@ -700,6 +871,10 @@ export function generateCity(city: number, opts: { skipSolvabilityGuard?: boolea
   const spec = guardSpec(city, rng)
   const guards: Guard[] = []
   for (let i = 0; i < spec.n; i++) {
+    // every third patrol is led by a captain: a tier up, a wider stare, a
+    // heavier step, and gold on the helmet so you can pick them out at a glance
+    const captain = spec.n >= 3 && i % 3 === 2
+    const tier = Math.min(GUARD_TIERS - 1, spec.tier + (captain ? 1 : 0))
     const path: Vec[] = []
     const anchor = cornerSpots.length
       ? cornerSpots[rng.int(0, cornerSpots.length - 1)]
@@ -727,15 +902,17 @@ export function generateCity(city: number, opts: { skipSolvabilityGuard?: boolea
       y: path[0].y,
       path,
       wp: 1 % path.length,
-      speed: spec.speed,
+      speed: spec.speed * (captain ? 1.12 : 1),
       state: 'patrol',
       alert: 0,
       dir: rng.float(0, Math.PI * 2),
       lastSeen: null,
       searchTimer: 0,
-      visionDist: spec.dist * TS,
-      visionHalfAngle: spec.half,
+      visionDist: spec.dist * TS * (captain ? 1.08 : 1),
+      visionHalfAngle: spec.half * (captain ? 1.06 : 1),
       stuckTimer: 0,
+      tier,
+      captain,
     })
   }
 
@@ -784,7 +961,12 @@ function makePuzzle(rng: RNG, city: number) {
       scrambled = rng.shuffle([...letters])
       if (scrambled.join('') !== word) break
     }
-    return { kind: 'word' as const, scrambled: scrambled.join(' '), answer: word, hint: 'Unscramble the letters' }
+    return {
+      kind: 'word' as const,
+      scrambled: scrambled.join(' '),
+      answer: word,
+      hint: rng.pick(['Unscramble the letters', 'The letters are shuffled', 'Put the letters back in order']),
+    }
   }
   if (roll < 0.7) {
     const a = rng.int(2, 9)
@@ -792,7 +974,12 @@ function makePuzzle(rng: RNG, city: number) {
     const c = rng.int(2, 9)
     return {
       kind: 'code' as const,
-      prompt: `The old gate code: multiply ${a} by ${b}, then add ${c}.`,
+      prompt: rng.pick([
+        `The old gate code: multiply ${a} by ${b}, then add ${c}.`,
+        `Gate code, scrawled on a wall: take ${a} times ${b}, then add ${c}.`,
+        `Someone chalked a sum by the door: ${a} times ${b}, plus ${c}.`,
+        `The code is arithmetic tonight: ${a} times ${b}, then ${c} more.`,
+      ]),
       answer: String(a * b + c),
     }
   }

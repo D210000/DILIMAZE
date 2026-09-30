@@ -1,5 +1,7 @@
+import { useEffect, useState } from 'react'
 import { BRAND } from '../game/brand'
 import type { Snapshot } from '../game/engine'
+import { fmtClock } from '../game/records'
 import { GlitchText } from './GlitchText'
 
 const C = BRAND.colors
@@ -19,6 +21,20 @@ const SIGNAL_LEVEL: Record<NonNullable<Snapshot['signal']>, number> = {
 }
 
 export function HUD({ snap }: { snap: Snapshot }) {
+  /**
+   * The clue block covers the street it is sitting on, so it stays folded down
+   * to a single bar: the count, the signal meter and one line of the riddle.
+   * It unfolds by itself whenever a new clue lands, because that is the moment
+   * the text actually has to be read, then folds back after a few seconds so the
+   * map underneath comes back into sight. The chevron pins it either way.
+   */
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    setOpen(true)
+    const t = setTimeout(() => setOpen(false), 7000)
+    return () => clearTimeout(t)
+  }, [snap.cluesFound, snap.city, snap.hasPass])
+
   const bar = (label: string, v: number, color: string) => (
     <div className="stat">
       <span className="stat-label">{label}</span>
@@ -30,6 +46,7 @@ export function HUD({ snap }: { snap: Snapshot }) {
 
   const clock = `${String(snap.hour).padStart(2, '0')}:00 ${snap.night ? '☾' : '☀'}`
   const lowHealth = snap.health < 30
+  const riddle = snap.clueHint || 'SIGNAL UNRESOLVED'
 
   return (
     <div className="hud">
@@ -38,7 +55,10 @@ export function HUD({ snap }: { snap: Snapshot }) {
           CITY {snap.city}/100 <span className="hud-sep">·</span> {snap.region.toUpperCase()}
         </div>
         <div className="hud-sub">
-          {snap.playerName} · Day {snap.day} · {clock} · {snap.daysInCity}d here
+          {snap.playerName} · Day {snap.day} · {clock} · {snap.daysInCity}d here{' '}
+          <span className="hud-timer" title="Level timer, counted for the ranking">
+            ⏱ {fmtClock(snap.cityTimeSec)}
+          </span>
         </div>
       </div>
 
@@ -67,33 +87,54 @@ export function HUD({ snap }: { snap: Snapshot }) {
         </div>
       )}
 
-      <div className="hud-bottom-left">
-        <div className="clues">
+      <div className={`hud-bottom-left${open ? ' open' : ''}`}>
+        <div className="clue-bar">
           <span className="clue-count">
             CLUES {snap.cluesFound}/{snap.cluesTotal}
-          </span>{' '}
-          {snap.hasPass ? (
-            <span className="pass-badge">BORDER PASS: RUN EAST</span>
-          ) : (
-            <GlitchText text={snap.clueHint || 'SIGNAL UNRESOLVED'} locked={!snap.clueKnown} />
-          )}
-        </div>
-        {/* the locator line: before the first clue it points at the opening
-            landmark, after that it travels with every riddle */}
-        {!snap.hasPass && (snap.clueKnown ? snap.clueHintLine : snap.clueEntry) && (
-          <div className="clue-hint">{snap.clueKnown ? snap.clueHintLine : snap.clueEntry}</div>
-        )}
-        {snap.signal && !snap.hasPass && (
-          <div className={`signal signal-${snap.signal}`}>
-            <span className="signal-label">SIGNAL {SIGNAL_LABEL[snap.signal]}</span>
-            <span className="signal-bars" aria-hidden="true">
-              {[0, 1, 2, 3].map((i) => (
-                <i key={i} className={i < SIGNAL_LEVEL[snap.signal!] ? 'on' : ''} />
-              ))}
+          </span>
+          {snap.hasPass && <span className="pass-badge">BORDER PASS: RUN EAST</span>}
+          {snap.signal && !snap.hasPass && (
+            <span className={`signal signal-${snap.signal}`}>
+              <span className="signal-label">SIGNAL {SIGNAL_LABEL[snap.signal]}</span>
+              <span className="signal-bars" aria-hidden="true">
+                {[0, 1, 2, 3].map((i) => (
+                  <i key={i} className={i < SIGNAL_LEVEL[snap.signal!] ? 'on' : ''} />
+                ))}
+              </span>
             </span>
-          </div>
+          )}
+          <button
+            className="clue-toggle"
+            onClick={() => setOpen((v) => !v)}
+            aria-expanded={open}
+            title={open ? 'Fold the clue text away' : 'Show the full clue text'}
+          >
+            {open ? '⌄ fold' : '⌃ clue'}
+          </button>
+        </div>
+
+        {!snap.hasPass && (
+          <>
+            {/* one line of the riddle while folded: the trail is never hidden */}
+            {!open && <div className="clue-peek">{snap.clueKnown ? riddle : snap.clueEntry}</div>}
+            {open && (
+              <div className="clue-detail">
+                <div className="clues">
+                  <GlitchText text={riddle} locked={!snap.clueKnown} />
+                </div>
+                {/* the locator line: before the first clue it points at the opening
+                    landmark, after that it travels with every riddle */}
+                {(snap.clueKnown ? snap.clueHintLine : snap.clueEntry) && (
+                  <div className="clue-hint">{snap.clueKnown ? snap.clueHintLine : snap.clueEntry}</div>
+                )}
+              </div>
+            )}
+          </>
         )}
-        {snap.guardsAlerted > 0 && <div className="alert-badge">🚨 CHASED BY {snap.guardsAlerted} GUARD(S)!</div>}
+
+        {snap.guardsAlerted > 0 && (
+          <div className="alert-badge">🚨 CHASED BY {snap.chasedBy.toUpperCase()}!</div>
+        )}
         {snap.nearSafehouse && !snap.hasPass && <div className="safe-badge">🛏 Safe to sleep (T)</div>}
       </div>
 

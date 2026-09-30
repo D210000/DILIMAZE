@@ -108,8 +108,9 @@ export function Onboarding({ onStart, initialSkin, recovered, tampered, storageO
           <p className="hint skin-blurb">{skinDef.blurb}</p>
 
           <button className="primary wide" onClick={submit}>
-            Start running
+            Continue
           </button>
+          <p className="hint">Next you pick Play from the menu, and you can change all of this later in Settings.</p>
 
           {tampered && (
             <p className="hint warn-line">

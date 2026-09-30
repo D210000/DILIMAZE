@@ -18,6 +18,10 @@ Find clues, solve puzzles, eat, drink, sleep... and stay out of the guard's sigh
   ("Rumor says the stamp hides near the radio"); the gold hint line under it tells you *roughly
   where* ("A fair walk. The radio waits in the northeast of the city"). Before you find the
   first clue, the HUD shows a **first lead** line instead, so no city ever opens with nothing.
+- The **clue panel** sits along the bottom of the screen and stays folded to a single bar (clue
+  count, signal meter and one line of the riddle) so it never hides the street you are walking.
+  It unfolds by itself when a clue lands, folds back a few seconds later, and the chevron pins it
+  open or shut as you like.
 - **Signal meter** — once the pinpoint help stops (City 6+, third clue on) the HUD shows how warm
   you are: `SIGNAL COLD → FAINT → WARM → HOT`. Walk around; when it reads HOT the landmark is
   within a few tiles. No arrow, no exact distance — just enough to close the gap.
@@ -62,21 +66,51 @@ run, tap the action buttons on the right.
 
 The world is a **neon dusk city**, not a blackout: mid-tone indigo/teal street palettes per region,
 bright lit windows, glowing rims on every interactive prop, magenta/cyan accents and soft
-red-orange guard cones. Day runs bright (measured mean frame luminance ≈ 90–115/255 depending on
-region); night is a violet wash that stays legible (≈ 61–74/255) rather than going black, and it
-still tightens the guards' vision. HUD panels sit on soft scrims so they stay readable over lit
-pavement, and the hero carries a white rim light plus a contact shadow so the mascot reads against
-bright and dark ground alike.
+red-orange guard cones.
+
+The city is drawn as **raised blocks, not flat squares**. Every building tile carries a lit roof
+face, a two tone parapet ring, skylights and rooftop clutter (AC units, hatches, water tanks over a
+shaded south wall with lit windows), and every block that faces open ground gets a **flight of
+stairs** out of its doorway, so you can read the height of a building from the street. Contact
+shadows sit under the south and east faces, and blocks are painted back to front so a nearer block
+overlaps the wall of the one behind it. Every prop follows the same rule: trees, bushes, benches,
+fountains, crates, fences, dumpsters, stalls, water towers and the clue landmarks
+(shops, bars, houses, boards, radios, graffiti, kids) are all boxes with a top face and a front
+face rather than icons.
+
+**Streets read as streets.** The road is asphalt with a sheen band, worn **gutters** and a painted
+**edge line** where it meets the kerb, a **dashed centre line** down the middle of each street,
+**zebra crossings** on the tiles either side of every intersection (the bars run with the traffic
+and are repeated across the road), a painted **box around the junction** itself, plus manhole
+covers and patched asphalt scattered by a deterministic per tile hash. Pavements are neutral stone
+slabs with a bright kerb lip along every street edge, so pavement, plaza, park, water and road each
+read differently at a glance.
+
+Each city day opens at **06:00 in full sun** and darkens as the play goes on, so the afternoon fades
+into a violet night wash and the light climbs back just before the next sunrise (no hard cut).
+Measured mean frame luminance is ≈ 96–122/255 in daylight and ≈ 62–75/255 at night, and both floors
+are asserted by the self-test. Night still changes how the guards see: a shorter but wider cone,
+and a quicker step. HUD panels sit on soft scrims so they stay readable over lit pavement, and the
+hero carries their own light plus a contact shadow so the mascot reads against bright and dark
+ground alike.
 
 ## Profile & save system
 
-Local-only, no backend, key `borderrun_profile` in `localStorage`.
+Local-only, no backend, key `borderrun_profile` in `localStorage` plus a second key
+`borderrun_records` for ranking times.
 
-- First load: onboarding screen — display name + avatar skin.
-- Return visits: **"Welcome back, {name}"** with career stats, then resume at the last saved city
-  (hunger, thirst, coins and clue progress included).
+- First load: onboarding for the display name + avatar skin, then the **main menu**.
+- The main menu carries **Play**, **Settings**, **How to play?** and **Ranking**, plus the world map.
+- Return visits land on that same menu, with **Continue** and **Start new run** in place of Play, so
+  a paused run resumes exactly where it stopped (hunger, thirst, coins and clue progress included).
+- **Settings** renames the runner and swaps the avatar skin; both write straight to the live save.
+- **How to play** is the in-game manual: the goal, the loop of a city, survival, guards, the light
+  and the ranking.
+- **Ranking** keeps the fastest clear of every level the player has finished, plus completed full
+  runs, in `borderrun_records`.
 - Autosaves on city completion, day rollover, sleep, death and every 10 seconds of live play.
-- **Reset profile** clears everything (available from the welcome screen).
+- **Reset profile** clears everything (progress, stats, lore and ranking times) and lives in
+  Settings.
 - All storage access is wrapped in try/catch: unreadable or corrupt data falls back to a fresh
   in-memory profile, so the game always runs even with storage blocked.
 
@@ -110,7 +144,7 @@ the browser console, or from the preview tooling:
 await window.__dilimaze.runSelfTest()
 ```
 
-66 checks, ~1.5s, all wired to the real modules (no mocks). It covers:
+80 checks, ~2s, all wired to the real modules (no mocks). It covers:
 
 - **Generation** — all 100 cities: map size matches the curve and grows monotonically, clue count
   matches the ramp, every clue points at a real unique landmark, every riddle/hint is present,
@@ -129,7 +163,11 @@ await window.__dilimaze.runSelfTest()
   landmark is a dead end. Also asserts the HUD riddle matches the clue you are hunting.
 - **Rendering** — every region × every pose × day/night renders without throwing, plus measured
   frame brightness (day ≥ 80/255, night ≥ 55/255, night < day) so a future palette change can't
-  quietly darken the game again.
+  quietly darken the game again. A separate check walks the arc: a city opens in full sun, darkens
+  through dusk into night, and lifts again before the next sunrise.
+- **Ranking records** — a level timer is banked and only a faster clear replaces it, junk times and
+  out of range cities are refused, a crafted board cannot pollute `Object.prototype`, an oversized
+  board is dropped fast, and the engine really does bank a time when a city is cleared.
 - **Saves & security** — round-trip fidelity, an honest save is never flagged, legacy
   fingerprint-less saves are accepted, legacy-migrated saves (high `bestCity`, low clears) are
   **not** wiped, hand-edited and plausibly-edited saves **are** caught, corrupt/oversized payloads
@@ -146,9 +184,10 @@ src/
     brand.ts      Dlicom brand kit: names, colors, avatar skins (+ art + sprite hook)
     character.ts  the ONLY place the mascot is drawn — art, tints, poses, preview
     city.ts       5 regions x 20 cities, generation, clue chains, hints, solvability guard
-    engine.ts     game loop, player, guards, survival, clues, profile checkpoints
-    render.ts     neon canvas world renderer
+    engine.ts     game loop, player, guards, survival, clues, day arc, level timer, checkpoints
+    render.ts     neon canvas world renderer: raised 3D blocks, street design, props
     profile.ts    localStorage profile, integrity fingerprint, migration, sanitisation
+    records.ts    local ranking board: fastest clear per level + completed full runs
     types.ts      shared types
     rng.ts        seeded RNG
   devtools/
@@ -159,13 +198,16 @@ src/
     the-bomb-sound.otf  popup/dialog face
   ui/
     Onboarding.tsx  name + avatar picker (with live canvas previews)
-    WelcomeBack.tsx returning-player menu, stats, reset
+    MainMenu.tsx    the hub: Play or Continue, Settings, How to play?, Ranking, world map
+    Settings.tsx    rename the runner, swap the avatar, reset the profile
+    HowToPlay.tsx   the in-game manual
+    Ranking.tsx     fastest clear per level + best full runs
     WorldMap.tsx    region/city select with fogged unreached cities + region lore files
     GlitchText.tsx  scrambled-until-unlocked copy
-    HUD.tsx         HUD, clue riddle + locator hint, signal meter, toasts
+    HUD.tsx         HUD, foldable clue bar + riddle + locator hint, signal meter, toasts
     Menus.tsx       dialog / puzzle / caught / cleared / victory overlays
     TouchControls.tsx  joystick + action buttons
-  App.tsx  screen flow: onboarding → welcome / map → game
+  App.tsx  screen flow: onboarding → menu → (settings | how to play | ranking | map) → game
   index.css  Dlicom neon theme (mirrors brand.ts colors)
 ```
 
@@ -177,14 +219,25 @@ src/
   once the opening arrow stops — the search is never blind
 - Puzzle coaching after 3 misses and a giveaway after 5, so riddles can't block a run
 - Bright neon-dusk world (measured frame luminance in the self-test) with legible night
+- A 3D read on the whole map: raised building blocks with walls, roofs, parapets and entrance
+  stairs, plus a rebuilt road design (kerbs, gutters, lane dashes, zebra crossings, junction
+  boxes, manholes)
+- A clue panel that stays out of the way: one folded bar with the clue count, signal meter and a
+  single line of the riddle, which unfolds by itself when a clue lands and folds back after a few
+  seconds, with a chevron to pin it either way
 - Difficulty ramp: opening clues sit close together with explicit directions at City 1–5, then
   scatter and go vague; puzzles from City 4, harder from City 30
 - Cities grow every level (38x30 → 84x66) and hide more clues (2 → 9)
 - Survival loop: hunger, thirst, health, $DLI, shops, market stalls, fountains, benches, sleep
 - Pickups and spent props read as such: collected clues get a green check, talked-to landmarks
   get crossed out, searched bins sit open and empty, shut houses go dark, $DLI tokens vanish
-- Day/night cycle, guard patrols, vision cones, chase/search, hiding, climbing
-- Profile system: onboarding, welcome-back, autosave, reset, corrupt-save recovery, tamper
+- Guard patrols, vision cones, chase/search, hiding, climbing
+- A day arc: each city opens in full sun at 06:00 and darkens into violet night as the play goes on
+- Main menu after naming: Play, Settings, How to play? and Ranking, with Continue and Start new
+  run for a returning player
+- Level timers: every city clear is timed, and the ranking board keeps your fastest clear per level
+  plus your best full run from City 1 to City 100
+- Profile system: onboarding, main menu, autosave, reset, corrupt-save recovery, tamper
   detection, legacy migration
 - World map with fogged locked cities, replay of reached cities, region lore unlocks
 - Real Dlicom mascot art, sliced and posed in code: alternating footfalls (one foot always
@@ -212,8 +265,8 @@ src/
 - **Skins** — `SKINS` holds four variants (Dlicom, Neon, Ghost, Sunset). They share the one PNG
   and are recolored at load with a canvas `color` blend (`tint`), so adding a variant is one
   entry. The canvas-drawn mascot is still in `character.ts` as the fallback if the PNG can't load.
-- **Sound** — `profile.settings.sound` is stored and surfaced in the profile, but no audio is
-  wired up yet.
+- **Sound** — `profile.settings.sound` is still stored in the profile but no audio is wired up and
+  Settings does not surface it yet.
 
 ## Run locally
 
