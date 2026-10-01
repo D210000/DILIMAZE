@@ -591,17 +591,15 @@ export function guardRankName(gd: { tier: number; captain: boolean }): string {
   return GUARD_RANKS[Math.max(0, Math.min(GUARD_TIERS - 1, gd.tier))]
 }
 
-// More guards, wider cones and longer legs the further east you get. At City 1 a
-// guard is slower than a walking runner; by the Borderlands a chase has to be
-// answered with a sprint or a hiding spot.
-function guardSpec(
-  city: number,
-  rng: RNG,
-): { n: number; dist: number; half: number; speed: number; tier: number } {
-  const n = Math.min(10, 2 + Math.floor(city / 12) + rng.int(0, 1))
+// More guards, wider cones and longer legs the further east you get. The patrol
+// count climbs a step every four cities up to a dozen, and the per city speed
+// rises too, but both stay below the runner's sprint: a chase is always
+// answerable with a run or a hiding spot, never a hopeless footrace.
+function guardSpec(city: number): { n: number; dist: number; half: number; speed: number; tier: number } {
+  const n = Math.min(12, 2 + Math.floor((city - 1) / 4))
   const dist = Math.min(10, 4.4 + city * 0.056)
   const half = Math.min(0.66, 0.4 + city * 0.0026)
-  const speed = Math.min(3.2, 1.3 + city * 0.019)
+  const speed = Math.min(4.7, 1.5 + city * 0.032)
   return { n, dist, half, speed, tier: guardTier(city) }
 }
 
@@ -1101,7 +1099,7 @@ export function generateCity(city: number, opts: { skipSolvabilityGuard?: boolea
   }
 
   // guards
-  const spec = guardSpec(city, rng)
+  const spec = guardSpec(city)
   const guards: Guard[] = []
   for (let i = 0; i < spec.n; i++) {
     // every third patrol is led by a captain: a tier up, a wider stare, a
@@ -1128,17 +1126,19 @@ export function generateCity(city: number, opts: { skipSolvabilityGuard?: boolea
         }
       }
     }
-    if (path.length === 0) path.push({ x: cx + 0.5, y: cy + 0.5 })
-    // the role bends the eyes and legs before the captain bonus is layered on
-    const role = guardRoleFor(city, i)
-    const traits = ROLE_TRAITS[role]
-    guards.push({
+    if (path.length === 0) path.push({ x: cx + 0.5, y: cy + 0.5 })      // the role bends the eyes and legs before the captain bonus is layered on,
+      // and the result is capped just under the runner's sprint (5.6 tiles/s)
+      // even through the night bonus, so nobody can be outrun only by running.
+      const role = guardRoleFor(city, i)
+      const traits = ROLE_TRAITS[role]
+      const speed = Math.min(4.9, spec.speed * traits.speed * (captain ? 1.12 : 1))
+      guards.push({
       id: i,
       x: path[0].x,
       y: path[0].y,
       path,
       wp: 1 % path.length,
-      speed: spec.speed * traits.speed * (captain ? 1.12 : 1),
+      speed,
       state: 'patrol',
       alert: 0,
       dir: rng.float(0, Math.PI * 2),

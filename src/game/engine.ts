@@ -11,6 +11,7 @@ import { DEFAULT_SKIN_ID } from './brand'
 import { saveProfile, type Profile, type RunState } from './profile'
 import { recordCityTime, recordRun } from './records'
 import { RNG } from './rng'
+import { sfx } from './sound'
 import type { CharacterPose, Guard, PlayerState, Prop, Puzzle, Toast, World } from './types'
 
 export interface DialogData {
@@ -205,12 +206,16 @@ export class Game {
   private profile: Profile | null
   private skinId: string
   private saveAccum = 0
+  /** counts down to the next footstep while the runner is on the move */
+  private stepTimer = 0
 
   constructor(city: number, deaths = 0, totalDays = 0, opts: GameOptions = {}) {
     this.world = generateCity(Math.max(1, Math.min(100, Math.round(city))))
     this.deaths = deaths
     this.totalDays = totalDays
     this.profile = opts.profile ?? null
+    // the saved mute flag drives the whole sound subsystem from one place
+    sfx.setEnabled(this.profile ? this.profile.settings.sound !== false : true)
     this.skinId = opts.skinId ?? this.profile?.skin ?? DEFAULT_SKIN_ID
     this.player = this.makePlayer(opts.resume ?? null)
     if (this.profile) {
@@ -453,6 +458,7 @@ export class Game {
     }
     p.moving = len > 0.1
     p.running = (this.wantRun || this.touchRun) && p.moving && !p.hidden
+    this.stepSound(dt)
 
     // walk-cycle pose, unless a transient pose (climb / sleep / interact) is playing
     if (p.poseTimer > 0) p.poseTimer -= dt
@@ -518,6 +524,24 @@ export class Game {
     }
   }
 
+  /**
+   * Footstep cadence. A step fires on a fixed beat while the runner is moving,
+   * shorter and sharper while running, and the beat resets the moment they stop
+   * so standing still is silent and the first step back is immediate.
+   */
+  private stepSound(dt: number) {
+    const p = this.player
+    if (!p.moving) {
+      this.stepTimer = 0
+      return
+    }
+    this.stepTimer -= dt
+    if (this.stepTimer <= 0) {
+      sfx.play(p.running ? 'stepRun' : 'step')
+      this.stepTimer = p.running ? 0.27 : 0.4
+    }
+  }
+
   private moveWithCollision(p: PlayerState, dt: number) {
     const solid = (x: number, y: number): boolean => {
       const tx = Math.floor(x / TS)
@@ -571,6 +595,7 @@ export class Game {
       if (gd.alert >= 1 && gd.state !== 'chase') {
         gd.state = 'chase'
         this.toast(`A ${guardRankName(gd)} spotted you!`, 'bad')
+        sfx.play('spotted')
       }
 
       // ---- ranged guards ----------------------------------------------
@@ -583,6 +608,7 @@ export class Game {
         gd.attackCd = Math.max(0.8, 1.95 - gd.tier * 0.12 - this.world.city * 0.004)
         gd.flash = 0.18
         gd.shotAt = { x: p.x, y: p.y }
+        sfx.play('gunshot')
         // the round hurts more the deeper east you have come
         const dmg = 4 + gd.tier * 1.6 + Math.floor(this.world.city / 10) * 1.4 + (gd.captain ? 3 : 0)
         p.health = Math.max(0, p.health - dmg)
@@ -704,6 +730,7 @@ export class Game {
       const dli = this.rng.int(2, 5)
       p.coins += dli
       this.toast(`+${dli} $DLI`, 'good')
+      sfx.play('coin')
     }
   }
 
@@ -810,6 +837,7 @@ export class Game {
       case 'fountain':
         p.thirst = 100
         this.toast('You drank deeply. Thirst quenched.', 'good')
+        sfx.play('drink')
         break
       case 'shop':
         if (prop.data === 'food') {
@@ -1005,6 +1033,7 @@ export class Game {
     this.player.hunger = Math.min(100, this.player.hunger + 55)
     this.player.health = Math.min(100, this.player.health + 8)
     this.toast('You ate. Hunger eased.', 'good')
+    sfx.play('eat')
   }
 
   drink() {
@@ -1016,6 +1045,7 @@ export class Game {
     this.player.thirst = Math.min(100, this.player.thirst + 60)
     this.player.health = Math.min(100, this.player.health + 6)
     this.toast('You drank. Thirst eased.', 'good')
+    sfx.play('drink')
   }
 
   private trySleep() {
@@ -1047,6 +1077,7 @@ export class Game {
     }
     this.setPose('sleep', 1.6)
     this.toast(`You slept until morning. Day ${this.day}.`, 'info')
+    sfx.play('sleep')
     this.saveMeta()
   }
 

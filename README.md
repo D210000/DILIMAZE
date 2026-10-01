@@ -51,7 +51,9 @@ Find clues, solve puzzles, eat, drink, sleep... and stay out of the guard's sigh
   east"). From City 6 onward that extra help is gone: the hint line and signal meter replace it.
 - **Guards patrol** with vision cones. They're sharper at night — hide (H) in bushes and crates,
   or slip past. Getting caught costs you the day.
-- **Guards get stronger, and change trade, as you push east.** Five ranks (patrol, sentry, warden,
+- **Guards get thicker, stronger and quicker, and change trade, as you push east.** The patrol
+  count climbs about one more every four cities (up to a dozen), and their pace rises with the city
+  while staying under your sprint. Five ranks (patrol, sentry, warden,
   marshal, enforcer) scale with the region, and every third guard is a **captain** (gold helmet,
   faster, wider stare). From **City 6** patrols also specialise, and each one wears its job: a
   **long** watcher with a raised lantern sees far down a street, a **wide** watcher with a shoulder
@@ -61,7 +63,8 @@ Find clues, solve puzzles, eat, drink, sleep... and stay out of the guard's sigh
   a dumpster (H hides instantly). Enough rounds will drop you, and the HUD warns with **UNDER
   FIRE** while a round is in the air.
 - **Sleep on benches** — nights on the street take a toll.
-- Days get shorter and guards get meaner as you push east. From **City 30** puzzles get harder.
+- Days get shorter, patrols grow thicker and faster, and guards get meaner as you push east.
+  From **City 30** puzzles get harder.
 - Every city is **bigger than the last** (38x30 tiles out of the gate, 84x66 by the border) and
   hides **more clues** (2 at City 1, rising to 9 by City 100), so the chain gets longer and the
   search gets wider.
@@ -172,7 +175,7 @@ the browser console, or from the preview tooling:
 await window.__dilimaze.runSelfTest()
 ```
 
-101 checks, ~3s, all wired to the real modules (no mocks). It covers:
+117 checks, ~3s, all wired to the real modules (no mocks). It covers:
 
 - **Generation** — all 100 cities: map size matches the curve and grows monotonically, clue count
   matches the ramp, every clue points at a real unique landmark, every riddle/hint is present,
@@ -187,9 +190,14 @@ await window.__dilimaze.runSelfTest()
 - **Guard roles & ranged fire** — the opening cities field brawlers only, a deep city fields a
   shooter, all four roles appear across the run, a long watcher's cone really is longer and a wide
   watcher's really is wider than a brawler's, a shooter takes health off the runner at range,
-  enough rounds put them down, and the death is reported as gunfire rather than starvation.
+  enough rounds put them down, and the death is reported as gunfire rather than starvation. Also
+  asserts the patrol count never falls and climbs with the city, and that not even the fastest guard
+  can outrun a sprint, even at night.
 - **Carried bars** — crossing a border keeps hunger, thirst and health to the point, while the new
   city still opens on a fresh Day 1 morning clock.
+- **Sound cues** — the engine asks for the right cue at the right moment: eating, drinking and
+  pocketing $DLI each fire their own, walking plays footsteps while standing still stays silent,
+  a guard locking on raises the spotted alarm, and muting silences every cue.
 - **Solvability** — a flood fill from the spawn reaches every clue and the gate in all 100 cities.
   Generation also reserves the spawn and gate tiles, refuses to let clutter seal a pocket, and
   runs a repair pass, so `solvabilityFixes` should stay 0.
@@ -233,6 +241,7 @@ src/
     records.ts    local ranking board: fastest clear per level + completed full runs
     types.ts      shared types
     rng.ts        seeded RNG
+    sound.ts      tiny synthesized WebAudio cues, no audio files
   devtools/
     selftest.ts   dev-only self-test harness (tree-shaken out of production)
   assets/
@@ -318,8 +327,11 @@ src/
 - **Skins** — `SKINS` holds four variants (Dlicom, Neon, Ghost, Sunset). They share the one PNG
   and are recolored at load with a canvas `color` blend (`tint`), so adding a variant is one
   entry. The canvas-drawn mascot is still in `character.ts` as the fallback if the PNG can't load.
-- **Sound** — `profile.settings.sound` is still stored in the profile but no audio is wired up and
-  Settings does not surface it yet.
+- **Sound** — `src/game/sound.ts` is a tiny synthesized cue kit: footsteps (walk and run), a guard
+  spotting you, gunfire, a $DLI chime, and eating / drinking / sleeping. No audio files ship: each
+  cue is built at runtime from oscillators and one shared noise buffer, so the bundle barely moves.
+  The AudioContext is created and resumed only from a real user gesture (pointer, key or touch), and
+  `settings.sound` gates the whole subsystem, so a muted player never builds one.
 
 ## Run locally
 

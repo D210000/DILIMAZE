@@ -28,6 +28,7 @@ import { Game, dayHour, dayLight } from '../game/engine'
 import { PROFILE_KEY, freshProfile, loadProfile, saveProfile, storageAvailable } from '../game/profile'
 import { RECORDS_KEY, clearRecords, fmtClock, loadRecords, recordCityTime, recordRun } from '../game/records'
 import { render } from '../game/render'
+import { sfx } from '../game/sound'
 import type { CharacterPose, Puzzle, World } from '../game/types'
 
 export interface CheckResult {
@@ -467,6 +468,35 @@ function cityTypeTests(s: Suite): void {
       (c) => /^#[0-9a-f]{6}$/i.test(c),
     ),
     `${sample.building} / ${sample.neon}`,
+  )
+
+  // ---- patrols thicken and quicken as the run goes on ----
+  let countClimbs = true
+  let countDetail = ''
+  for (let city = 1; city < 100; city++) {
+    if (generateCity(city + 1).guards.length < generateCity(city).guards.length) {
+      countClimbs = false
+      countDetail = `city ${city + 1} fields fewer guards than city ${city}`
+      break
+    }
+  }
+  s.check('the patrol count never falls as you go east', countClimbs, countDetail || 'monotone growth')
+  s.check(
+    'later cities field more guards than early ones',
+    generateCity(60).guards.length > generateCity(1).guards.length,
+    `${generateCity(1).guards.length} → ${generateCity(60).guards.length} guards`,
+  )
+
+  const fastest = (city: number) => Math.max(...generateCity(city).guards.map((g) => g.speed))
+  s.check(
+    'guard speed climbs with the city',
+    fastest(60) > fastest(6),
+    `${fastest(6).toFixed(2)} → ${fastest(60).toFixed(2)} tiles/s`,
+  )
+  s.check(
+    'but no guard outruns a sprint, even at night',
+    fastest(100) * 1.1 < 5.6,
+    `fastest guard ${fastest(100).toFixed(2)} tiles/s, ${(fastest(100) * 1.1).toFixed(2)} at night vs 5.6 sprint`,
   )
 
   // ---- guard roles ----
@@ -1177,6 +1207,100 @@ function recordsTests(s: Suite): void {
 }
 
 /* ------------------------------------------------------------------ */
+/* sound cues                                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The audio itself cannot be asserted, but the wiring can: `sfx` counts every
+ * cue that is requested even before the browser hands over an AudioContext, so
+ * this drives the real engine and checks each action asks for its own sound.
+ */
+function soundTests(s: Suite): void {
+  const wasEnabled = sfx.isEnabled()
+  sfx.setEnabled(true)
+  sfx.resetFired()
+
+  const g = new Game(2, 0, 0, { profile: freshProfile('Noisy') })
+  g.world.guards.length = 0
+
+  g.action('eat')
+  s.check('eating asks for its own cue', sfx.getLast() === 'eat', `${sfx.getFired()} cue(s), last ${sfx.getLast()}`)
+  g.action('drink')
+  s.check('drinking asks for its own cue', sfx.getLast() === 'drink', `${sfx.getFired()} cue(s), last ${sfx.getLast()}`)
+
+  const beforeRefused = sfx.getFired()
+  g.action('sleep')
+  s.check('a refused sleep stays silent', sfx.getFired() === beforeRefused, `${sfx.getFired()} cue(s)`)
+
+  // walking makes a noise, standing still does not
+  const idle = new Game(2, 0, 0, { profile: freshProfile('Still') })
+  idle.world.guards.length = 0
+  idle.tick(1 / 60)
+  const still = sfx.getFired()
+  for (let i = 0; i < 90; i++) idle.tick(1 / 60)
+  s.check('standing still is silent', sfx.getFired() === still, `${still} cue(s) at rest`)
+  for (let i = 0; i < 90; i++) {
+    idle.setKey('KeyD', true)
+    idle.tick(1 / 60)
+  }
+  idle.setKey('KeyD', false)
+  s.check('walking plays footsteps', sfx.getFired() > still, `${still} → ${sfx.getFired()} cue(s)`)
+  s.check('the footstep cue is a step, not something else', sfx.getLast() === 'step', `last ${sfx.getLast()}`)
+
+  // pocketing a token chimes
+  const g3 = new Game(2, 0, 0, { profile: freshProfile('Coins') })
+  g3.world.guards.length = 0
+  const coin = g3.world.props.find((x) => x.kind === 'coin')
+  if (coin) {
+    g3.player.x = coin.x - 5 * TS
+    g3.player.y = coin.y
+    g3.tick(1 / 60)
+    for (let i = 0; i < 200 && !coin.used; i++) {
+      g3.setKey('KeyD', true)
+      g3.tick(1 / 60)
+    }
+    g3.setKey('KeyD', false)
+    s.check('pocketing $DLI chimes', coin.used && sfx.getLast() === 'coin', `last ${sfx.getLast()}`)
+  } else {
+    s.check('city 2 has a $DLI token to chime over', false)
+  }
+
+  // a guard locking on raises the alarm
+  const g2 = new Game(4, 0, 0, { profile: freshProfile('Spotted') })
+  const guard = g2.world.guards[0]
+  if (guard) {
+    const before = sfx.getFired()
+    guard.x = g2.player.x - 30
+    guard.y = g2.player.y
+    guard.dir = 0
+    guard.alert = 0.99
+    for (let i = 0; i < 10 && guard.state !== 'chase'; i++) g2.tick(1 / 60)
+    s.check(
+      'a guard locking on plays the spotted cue',
+      guard.state === 'chase' && sfx.getFired() > before && sfx.getLast() === 'spotted',
+      `state ${guard.state}, last ${sfx.getLast()}`,
+    )
+  } else {
+    s.check('city 4 has a guard to spot with', false)
+  }
+
+  // the mute flag silences every cue
+  sfx.setEnabled(false)
+  const muted = sfx.getFired()
+  g.action('eat')
+  g.action('drink')
+  s.check('muting silences every cue', sfx.getFired() === muted, `${muted} cue(s)`)
+  s.check('a fresh engine reads the saved mute flag', (() => {
+    const off = freshProfile('Quiet')
+    off.settings.sound = false
+    void new Game(1, 0, 0, { profile: off })
+    return sfx.isEnabled() === false
+  })())
+
+  sfx.setEnabled(wasEnabled)
+}
+
+/* ------------------------------------------------------------------ */
 /* entry point                                                         */
 /* ------------------------------------------------------------------ */
 
@@ -1193,6 +1317,7 @@ export function runSelfTest(): SelfTestReport {
     cityTypeTests(s)
     survivalTests(s)
     guardTests(s)
+    soundTests(s)
     puzzleTests(s)
     renderTests(s)
     profileTests(s)
