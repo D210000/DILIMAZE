@@ -12,7 +12,7 @@ import { saveProfile, type Profile, type RunState } from './profile'
 import { recordCityTime, recordRun } from './records'
 import { RNG } from './rng'
 import { sfx } from './sound'
-import type { CharacterPose, Guard, PlayerState, Prop, Puzzle, Toast, World } from './types'
+import type { CharacterPose, Guard, PlayerState, Prop, Puzzle, TileKind, Toast, World } from './types'
 
 export interface DialogData {
   title: string
@@ -525,6 +525,7 @@ export class Game {
     ) {
       this.status = 'cityCleared'
       this.caughtTimer = 2.0
+      sfx.play('clear')
       this.saveMeta()
       return
     }
@@ -582,6 +583,13 @@ export class Game {
     const p = this.player
     const night = this.isNight()
     for (const gd of this.world.guards) {
+      // A guard that has been grinding against the same corner for three seconds
+      // is wedged, not walking: nudge it onto the nearest clear tile and let it
+      // pick its route up again. Cheaper and more reliable than perfect paths.
+      if (gd.stuckTimer > 3) {
+        this.unstickGuard(gd)
+        gd.stuckTimer = 0
+      }
       const dist = Math.hypot(p.x - gd.x, p.y - gd.y)
       const angleTo = Math.atan2(p.y - gd.y, p.x - gd.x)
       let angDiff = Math.abs(((angleTo - gd.dir + Math.PI * 3) % (Math.PI * 2)) - Math.PI)
@@ -615,8 +623,10 @@ export class Game {
         gd.flash = 0.18
         gd.shotAt = { x: p.x, y: p.y }
         sfx.play('gunshot')
-        // the round hurts more the deeper east you have come
-        const dmg = 4 + gd.tier * 1.6 + Math.floor(this.world.city / 10) * 1.4 + (gd.captain ? 3 : 0)
+        // A round is a bullet, not a bee sting: from a full bar three hits are
+        // always enough to put the runner down, and deeper cities drop that to
+        // two. It is capped at 50 so no single shot can ever be a one hit kill.
+        const dmg = Math.min(50, Math.max(34, 34 + gd.tier * 3 + Math.floor(this.world.city / 12) * 4 + (gd.captain ? 6 : 0)))
         p.health = Math.max(0, p.health - dmg)
         this.hitFlash = 1
         if (this.shotToastCd <= 0) {
@@ -650,7 +660,7 @@ export class Game {
                 const s = Math.sign(vy) || 1
                 this.guardSolidMove(gd, 0, s * spd * dt)
                 if (Math.hypot(gd.x - before.x, gd.y - before.y) < 0.5) this.guardSolidMove(gd, s * spd * dt, 0)
-                if (gd.stuckTimer > 2.5) {
+                if (gd.stuckTimer > 4) {
                   gd.state = 'search'
                   gd.searchTimer = 2.5
                   gd.stuckTimer = 0
@@ -685,7 +695,7 @@ export class Game {
           gd.dir = Math.atan2(dy, dx)
           if (!moved && Math.hypot(dx, dy) > 10) {
             gd.stuckTimer += dt
-            if (gd.stuckTimer > 2) {
+            if (gd.stuckTimer > 4) {
               gd.state = 'patrol'
               gd.stuckTimer = 0
             }
@@ -709,8 +719,11 @@ export class Game {
           const moved = this.guardSolidMove(gd, (dx / d) * gd.speed * TS * 0.6 * dt, (dy / d) * gd.speed * TS * 0.6 * dt)
           gd.dir = Math.atan2(dy, dx)
           if (!moved) {
+            // the straight line to this stop is walled off: skip to the next one
+            // and, if that keeps failing, the top of the loop frees the guard
+            gd.stuckTimer += dt
             gd.wp = (gd.wp + 1) % gd.path.length
-          }
+          } else gd.stuckTimer = 0
         }
       }
       // suspicious transition
@@ -762,6 +775,41 @@ export class Game {
     const ny = gd.y + dy
     if (!solid(gd.x, ny) && !propBlock(gd.x, ny)) gd.y = ny
     return Math.hypot(gd.x - before.x, gd.y - before.y) > Math.hypot(dx, dy) * 0.25
+  }
+
+  /**
+   * Drop a wedged guard onto the middle of the nearest tile it can stand on.
+   * The search sweeps outward a ring at a time, so the guard shifts as little as
+   * possible and never ends up inside a building or out in the water.
+   */
+  private unstickGuard(gd: Guard) {
+    const OPEN = (t: TileKind | undefined) =>
+      t === 'road' || t === 'sidewalk' || t === 'plaza' || t === 'park'
+    const blocked = (tx: number, ty: number): boolean => {
+      if (tx < 0 || ty < 0 || tx >= this.world.w || ty >= this.world.h) return true
+      const t = this.world.tiles[ty * this.world.w + tx]
+      return t === 'building' || t === 'water' || t === 'wall'
+    }
+    const gx = Math.floor(gd.x / TS)
+    const gy = Math.floor(gd.y / TS)
+    // prefer proper pavement so a freed guard lands back on a road; only if the
+    // whole neighbourhood is a block do we settle for any solid ground tile
+    for (const pass of [0, 1]) {
+      for (let r = 1; r <= 8; r++) {
+        for (let dy = -r; dy <= r; dy++) {
+          for (let dx = -r; dx <= r; dx++) {
+            if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue
+            const tx = gx + dx
+            const ty = gy + dy
+            if (blocked(tx, ty)) continue
+            if (pass === 0 && !OPEN(this.world.tiles[ty * this.world.w + tx])) continue
+            gd.x = (tx + 0.5) * TS
+            gd.y = (ty + 0.5) * TS
+            return
+          }
+        }
+      }
+    }
   }
 
   private lineOfSight(x1: number, y1: number, x2: number, y2: number): boolean {

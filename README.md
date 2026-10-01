@@ -51,7 +51,7 @@ Find clues, solve puzzles, eat, drink, sleep... and stay out of the guard's sigh
   compass arrow and a live block count, and the riddle names a direction ("the bar, 17 blocks
   east"). From City 6 onward that extra help is gone: the hint line and signal meter replace it.
 - **Guards patrol** with vision cones. They're sharper at night — hide (H) in bushes and crates,
-  or slip past. Getting caught costs you the day.
+  or slip past; their routes follow open streets, and a guard that somehow wedges itself on a corner frees itself and carries on. Getting caught costs you the day.
 - **Guards get thicker, stronger and quicker, and change trade, as you push east.** The patrol
   count climbs about one more every four cities (up to a dozen), and their pace rises with the city
   while staying under your sprint. Five ranks (patrol, sentry, warden,
@@ -60,7 +60,7 @@ Find clues, solve puzzles, eat, drink, sleep... and stay out of the guard's sigh
   **long** watcher with a raised lantern sees far down a street, a **wide** watcher with a shoulder
   torch sweeps a whole corner, and from **City 11** some guards carry a weapon and will **shoot**
   you from range — they stop in the open, fire on a reload timer, and the damage grows with the
-  city. There is no way to fight back: break the line of sight behind a building, a bush, a crate or
+  city. Three good hits from a full bar can drop you, so never stand in the open. There is no way to fight back: break the line of sight behind a building, a bush, a crate or
   a dumpster (H hides instantly). Enough rounds will drop you, and the HUD warns with **UNDER
   FIRE** while a round is in the air.
 - **Sleep on benches** — nights on the street take a toll.
@@ -176,7 +176,7 @@ the browser console, or from the preview tooling:
 await window.__dilimaze.runSelfTest()
 ```
 
-122 checks, ~3s, all wired to the real modules (no mocks). It covers:
+126 checks, ~3s, all wired to the real modules (no mocks). It covers:
 
 - **Generation** — all 100 cities: map size matches the curve and grows monotonically, clue count
   matches the ramp, every clue points at a real unique landmark, every riddle/hint is present,
@@ -191,7 +191,7 @@ await window.__dilimaze.runSelfTest()
 - **Guard roles & ranged fire** — the opening cities field brawlers only, a deep city fields a
   shooter, all four roles appear across the run, a long watcher's cone really is longer and a wide
   watcher's really is wider than a brawler's, a shooter takes health off the runner at range,
-  enough rounds put them down, and the death is reported as gunfire rather than starvation. Also
+  at most three rounds put you down, and the death is reported as gunfire rather than starvation. Also
   asserts the patrol count never falls and climbs with the city, and that not even the fastest guard
   can outrun a sprint, even at night.
 - **Carried bars** — crossing a border keeps hunger, thirst and health to the point, while the new
@@ -199,7 +199,7 @@ await window.__dilimaze.runSelfTest()
 - **Sound cues** — the engine asks for the right cue at the right moment: eating, drinking and
   pocketing $DLI each fire their own, walking plays footsteps while standing still stays silent,
   a guard locking on wails the siren, a button click and a panel opening each have their own cue,
-  the background bed starts and stops with a run, and muting silences every cue. Also asserts an old
+  clearing a city rings out its own fanfare, the background bed starts and stops with a run, and muting silences every cue. Also asserts an old
   played save skips the first time tour while a clean one still gets it.
 - **Solvability** — a flood fill from the spawn reaches every clue and the gate in all 100 cities.
   Generation also reserves the spawn and gate tiles, refuses to let clutter seal a pocket, and
@@ -244,7 +244,7 @@ src/
     records.ts    local ranking board: fastest clear per level + completed full runs
     types.ts      shared types
     rng.ts        seeded RNG
-    sound.ts      tiny synthesized WebAudio cues, no audio files
+    sound.ts      synthesized WebAudio cues, plus a drone and tune bed (no audio files)
   devtools/
     selftest.ts   dev-only self-test harness (tree-shaken out of production)
   assets/
@@ -332,8 +332,9 @@ src/
   entry. The canvas-drawn mascot is still in `character.ts` as the fallback if the PNG can't load.
 - **Sound** — `src/game/sound.ts` is a tiny synthesized cue kit plus a looping background bed:
   footsteps (walk and run), a wailing siren when a guard spots you, gunfire, a $DLI chime, eating /
-  drinking / sleeping, a UI tap for any button, and a scrape for a panel opening. A slow low drone
-  breathes under a run and fades out when you return to the menu. No audio files ship: every sound is
+  drinking / sleeping, a UI tap for any button, a scrape for a panel opening, and a rising fanfare
+  when a city is cleared. A slow low drone
+  breathes under a run and fades out when you return to the menu, with a light plucked pentatonic tune over it so a long city has some bounce. No audio files ship: every sound is
   built at runtime from oscillators and one shared noise buffer, so the bundle barely moves. The
   AudioContext is created and resumed only from a real user gesture (pointer, key or touch), and
   `settings.sound` gates the whole subsystem, so a muted player never builds one.

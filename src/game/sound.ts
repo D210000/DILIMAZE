@@ -28,9 +28,20 @@ export type Cue =
   | 'sleep'
   | 'click'
   | 'open'
+  | 'clear'
 
 /** how loud the background bed sits under everything else */
 const AMBIENT_LEVEL = 0.07
+
+/**
+ * The background tune. The bed underneath is still the slow drone, but on top
+ * of it a light plucked loop walks a pentatonic scale over four barre chords,
+ * so a long run has something with a bit of bounce instead of a flat hum.
+ */
+const MELODY_STEP = 0.3 // seconds per note (roughly a brisk eighth note)
+const SCALE = [220, 261.63, 293.66, 329.63, 392, 440, 523.25] // A minor pentatonic
+const MELODY = [5, 3, 2, 3, 5, 3, 2, 0, 4, 2, 1, 2, 4, 2, 1, -1]
+const ROOTS = [110, 130.81, 98, 87.31] // A, C, G, F, one per four notes
 
 interface ToneOptions {
   freq: number
@@ -72,6 +83,11 @@ class Sfx {
   private ambient: AmbientBed | null = null
   /** the player asked for background sound (it may still be waiting on a gesture) */
   private ambientDesired = false
+  /** the lookahead scheduler driving the background tune */
+  private melodyTimer: number | null = null
+  private melodyStep = 0
+  /** AudioContext time the next melody note is due */
+  private melodyAt = 0
 
   constructor() {
     if (typeof window === 'undefined') return
@@ -185,6 +201,9 @@ class Sfx {
         break
       case 'open':
         this.open()
+        break
+      case 'clear':
+        this.clear()
         break
     }
   }
@@ -324,9 +343,11 @@ class Sfx {
     lfo.start(t)
     filt.connect(g).connect(this.master)
     this.ambient = { oscs, lfo, gain: g }
+    this.startMelody()
   }
 
   private teardownAmbient() {
+    this.stopMelody()
     const bed = this.ambient
     if (!bed) return
     this.ambient = null
@@ -356,14 +377,57 @@ class Sfx {
   }
 
   /* ---------------------------------------------------------------- */
+  /* background tune                                                  */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Standard WebAudio scheduling: a timer wakes up often, but notes are queued
+   * against the audio clock a little way into the future. That keeps the beat
+   * steady even when the main thread stutters, and a background tab simply
+   * queues a little more or less without going silent mid phrase.
+   */
+  private startMelody() {
+    if (this.melodyTimer !== null || typeof window === 'undefined') return
+    const ctx = this.ctx
+    if (!ctx) return
+    this.melodyStep = 0
+    this.melodyAt = ctx.currentTime + 0.1
+    this.pumpMelody()
+    this.melodyTimer = window.setInterval(() => this.pumpMelody(), 180)
+  }
+
+  private stopMelody() {
+    if (this.melodyTimer === null) return
+    window.clearInterval(this.melodyTimer)
+    this.melodyTimer = null
+  }
+
+  private pumpMelody() {
+    const ctx = this.ctx
+    if (!ctx || !this.ambient) return
+    const horizon = ctx.currentTime + 0.5
+    while (this.melodyAt < horizon) {
+      const at = this.melodyAt - ctx.currentTime
+      const i = this.melodyStep % MELODY.length
+      const note = MELODY[i]
+      if (note >= 0) this.tone({ freq: SCALE[note], dur: 0.26, type: 'triangle', gain: 0.06, at })
+      if (i % 4 === 0) {
+        this.tone({ freq: ROOTS[(i / 4) % ROOTS.length], dur: 0.5, type: 'triangle', gain: 0.05, at })
+      }
+      this.melodyAt += MELODY_STEP
+      this.melodyStep++
+    }
+  }
+
+  /* ---------------------------------------------------------------- */
   /* cues                                                            */
   /* ---------------------------------------------------------------- */
 
   /** a soft pavement tap; running lands it harder and a touch brighter */
   private step(run: boolean) {
-    const g = run ? 0.2 : 0.13
-    this.burst({ dur: run ? 0.06 : 0.05, gain: g, freq: run ? 520 : 380, q: 0.8 })
-    this.tone({ freq: run ? 120 : 95, dur: 0.07, type: 'sine', gain: g * 0.75, slideTo: 58 })
+    const g = run ? 0.34 : 0.26
+    this.burst({ dur: run ? 0.07 : 0.06, gain: g, freq: run ? 560 : 400, q: 0.8 })
+    this.tone({ freq: run ? 130 : 100, dur: 0.08, type: 'sine', gain: g * 0.8, slideTo: 58 })
   }
 
   /** a wailing two-tone alarm: somebody just locked on to you */
@@ -437,6 +501,21 @@ class Sfx {
   private open() {
     this.burst({ dur: 0.12, gain: 0.13, freq: 420, q: 1.4, type: 'bandpass' })
     this.tone({ freq: 240, dur: 0.18, type: 'sine', gain: 0.1, slideTo: 120 })
+  }
+
+  /**
+   * The border gate swings open: a rising four note fanfare that resolves up an
+   * octave, so the moment a city is cleared lands as a win instead of a blip.
+   */
+  private clear() {
+    const notes: Array<[number, number]> = [
+      [523.25, 0],
+      [659.25, 0.12],
+      [783.99, 0.24],
+      [1046.5, 0.36],
+    ]
+    for (const [freq, at] of notes) this.tone({ freq, dur: 0.3, type: 'triangle', gain: 0.16, at })
+    this.tone({ freq: 130.81, dur: 0.7, type: 'sine', gain: 0.12, at: 0.36, slideTo: 261.63 })
   }
 }
 

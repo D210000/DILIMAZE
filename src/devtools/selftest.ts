@@ -29,7 +29,7 @@ import { PROFILE_KEY, freshProfile, loadProfile, saveProfile, storageAvailable }
 import { RECORDS_KEY, clearRecords, fmtClock, loadRecords, recordCityTime, recordRun } from '../game/records'
 import { render } from '../game/render'
 import { sfx } from '../game/sound'
-import type { CharacterPose, Puzzle, World } from '../game/types'
+import type { CharacterPose, Puzzle, TileKind, World } from '../game/types'
 
 export interface CheckResult {
   name: string
@@ -553,16 +553,33 @@ function cityTypeTests(s: Suite): void {
       gunner.y = g.player.y
       gunner.x = g.player.x + 4 * TS
       gunner.dir = Math.atan2(g.player.y - gunner.y, g.player.x - gunner.x)
-      for (let i = 0; i < 60 && g.player.health === 100; i++) g.tick(0.05)
+      // count the rounds that land, so "a bullet is lethal" is measured and not
+      // just assumed: from a full bar the runner must go down in three or fewer
+      let hits = 0
+      let lastHealth = g.player.health
+      const advance = (n: number, until: () => boolean) => {
+        for (let i = 0; i < n && until(); i++) {
+          g.tick(0.05)
+          if (g.player.health < lastHealth) {
+            hits++
+            lastHealth = g.player.health
+          }
+        }
+      }
+      advance(60, () => g.player.health === 100)
       s.check(
         'a shooting guard takes health off the runner at range',
-        g.player.health < 100,
+        hits >= 1,
         `health ${Math.round(g.player.health)}`,
       )
-      // the shooter has to reload between rounds, so this takes a while of game
-      // time, but it stops the moment the runner goes down
-      for (let i = 0; i < 1600 && g.status === 'playing'; i++) g.tick(0.05)
-      s.check('enough rounds put the runner down', g.status === 'collapsed', `status "${g.status}"`)
+      // the shooter reloads between rounds, so this takes a while of game time,
+      // but it stops the moment the runner goes down
+      advance(1600, () => g.status === 'playing')
+      s.check(
+        'at most three rounds put the runner down',
+        g.status === 'collapsed' && hits <= 3,
+        `${hits} round(s) to down the runner`,
+      )
       s.check('a death by gunfire says so, not that you starved', /shot/i.test(g.deathReason), `"${g.deathReason}"`)
     } else {
       s.check('the shooting city regenerates its shooter', false)
@@ -753,6 +770,67 @@ function guardTests(s: Suite): void {
     s.check('hiding in cover keeps a chasing guard off you', !stillCaught, stillCaught ? 'caught while hidden' : 'stayed hidden')
   } else {
     s.check('city 4 has cover to hide in', false)
+  }
+
+  // ---- patrol routes stay on open ground ----
+  // A patrol walks straight between its stops, so every stop must be walkable
+  // and every leg between stops must avoid buildings or the guard grinds at a
+  // wall and never arrives.
+  const isOpenTile = (t: TileKind | undefined) =>
+    t === 'road' || t === 'sidewalk' || t === 'plaza' || t === 'park'
+  let badNode = ''
+  let badLeg = ''
+  for (let city = 1; city <= 40 && !badNode && !badLeg; city++) {
+    const w = generateCity(city)
+    for (const gd of w.guards) {
+      for (let i = 0; i < gd.path.length; i++) {
+        const tx = Math.floor(gd.path[i].x)
+        const ty = Math.floor(gd.path[i].y)
+        if (tx < 0 || ty < 0 || tx >= w.w || ty >= w.h || !isOpenTile(w.tiles[ty * w.w + tx])) {
+          badNode = `city ${city} stop ${i} at ${tx},${ty}`
+          break
+        }
+      }
+      if (badNode) break
+      for (let i = 0; i + 1 < gd.path.length; i++) {
+        const a = gd.path[i]
+        const b = gd.path[i + 1]
+        const steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) * 2))
+        for (let k = 1; k <= steps; k++) {
+          const t = k / steps
+          const tx = Math.floor(a.x + (b.x - a.x) * t)
+          const ty = Math.floor(a.y + (b.y - a.y) * t)
+          if (tx < 0 || ty < 0 || tx >= w.w || ty >= w.h || !isOpenTile(w.tiles[ty * w.w + tx])) {
+            badLeg = `city ${city} leg ${i}`
+            break
+          }
+        }
+        if (badLeg) break
+      }
+      if (badLeg) break
+    }
+  }
+  s.check('every patrol stop stands on walkable ground', badNode === '', badNode || 'all stops clear')
+  s.check('no patrol leg crosses a building', badLeg === '', badLeg || 'all legs open')
+
+  // ---- a wedged guard frees itself ----
+  const stuck = new Game(4, 0, 0, { profile: freshProfile('Wedged') })
+  const wedged = stuck.world.guards[0]
+  const building = stuck.world.tiles.findIndex((t) => t === 'building')
+  if (wedged && building >= 0) {
+    wedged.x = ((building % stuck.world.w) + 0.5) * TS
+    wedged.y = (Math.floor(building / stuck.world.w) + 0.5) * TS
+    wedged.stuckTimer = 4
+    stuck.tick(1 / 60)
+    const tx = Math.floor(wedged.x / TS)
+    const ty = Math.floor(wedged.y / TS)
+    s.check(
+      'a wedged guard is freed onto open ground',
+      isOpenTile(stuck.world.tiles[ty * stuck.world.w + tx]),
+      `tile ${tx},${ty}`,
+    )
+  } else {
+    s.check('city 4 has a guard and a building to wedge', false)
   }
 }
 
@@ -1320,6 +1398,20 @@ function soundTests(s: Suite): void {
   } else {
     s.check('city 4 has a guard to spot with', false)
   }
+
+  // walking out the border gate raises the city cleared fanfare
+  const gClear = new Game(3, 0, 0, { profile: freshProfile('Clear') })
+  gClear.world.guards.length = 0
+  gClear.player.hasPass = true
+  gClear.player.x = (gClear.world.w - 1) * TS + 8
+  gClear.player.y = gClear.world.gate.y * TS
+  sfx.resetFired()
+  gClear.tick(1 / 60)
+  s.check(
+    'clearing a city plays the city cleared cue',
+    gClear.status === 'cityCleared' && sfx.getLast() === 'clear',
+    `status "${gClear.status}", last ${sfx.getLast()}`,
+  )
 
   // the mute flag silences every cue
   sfx.setEnabled(false)

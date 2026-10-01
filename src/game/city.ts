@@ -1107,23 +1107,46 @@ export function generateCity(city: number, opts: { skipSolvabilityGuard?: boolea
     const captain = spec.n >= 3 && i % 3 === 2
     const tier = Math.min(GUARD_TIERS - 1, spec.tier + (captain ? 1 : 0))
     const path: Vec[] = []
+    // Does the straight line between two tiles stay on ground a guard can
+    // cross? A patrol walks hip to hip between stops rather than pathfinding, so
+    // any leg that clips a building used to leave the guard grinding at a wall.
+    const legClear = (ax: number, ay: number, bx: number, by: number): boolean => {
+      const steps = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) * 2))
+      for (let i = 1; i <= steps; i++) {
+        const t = i / steps
+        const x = Math.floor(ax + (bx - ax) * t + 0.5)
+        const y = Math.floor(ay + (by - ay) * t + 0.5)
+        if (x < 0 || y < 0 || x >= w || y >= h) return false
+        if (!walkable(getTile(x, y))) return false
+      }
+      return true
+    }
     const anchor = cornerSpots.length
       ? cornerSpots[rng.int(0, cornerSpots.length - 1)]
       : { x: rng.int(4, w - 5), y: rng.int(4, h - 5) }
     let cx = Math.floor(anchor.x)
     let cy = Math.floor(anchor.y)
+    // the route has to start somewhere a guard can actually stand
+    if (cx < 0 || cy < 0 || cx >= w || cy >= h || !walkable(getTile(cx, cy))) {
+      const near = freeSpotNear(cx, cy)
+      if (near) {
+        cx = near.x
+        cy = near.y
+      }
+    }
     const nodes = rng.int(3, 5)
     for (let k = 0; k < nodes; k++) {
-      // hop to a nearby road tile for a legal patrol route
-      for (let tries = 0; tries < 40; tries++) {
-        const nx = cx + rng.int(-8, 8)
-        const ny = cy + rng.int(-8, 8)
-        if (walkable(getTile(nx, ny))) {
-          path.push({ x: nx + 0.5, y: ny + 0.5 })
-          cx = nx
-          cy = ny
-          break
-        }
+      // hop to a nearby road tile whose whole leg stays clear of buildings
+      for (let tries = 0; tries < 60; tries++) {
+        const nx = cx + rng.int(-6, 6)
+        const ny = cy + rng.int(-6, 6)
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
+        if (!walkable(getTile(nx, ny))) continue
+        if (!legClear(cx, cy, nx, ny)) continue
+        path.push({ x: nx + 0.5, y: ny + 0.5 })
+        cx = nx
+        cy = ny
+        break
       }
     }
     if (path.length === 0) path.push({ x: cx + 0.5, y: cy + 0.5 })      // the role bends the eyes and legs before the captain bonus is layered on,
