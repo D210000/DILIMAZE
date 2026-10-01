@@ -30,12 +30,36 @@ Find clues, solve puzzles, eat, drink, sleep... and stay out of the guard's sigh
   answer. A quiz can slow a run down, not end it.
 - Watch your **hunger and thirst**: drink free at fountains, buy food at shops with **$DLI**.
   Collapsing restarts the city from Day 1.
-- Collect **$DLI** tokens scattered around the streets (they disappear once picked up).
+- **Your bars cross the border with you.** Food, water and health are not topped up when you reach
+  the next city: the new level opens on a fresh morning clock, but the three bars carry on exactly
+  where you left them. Stock up in a city instead of coasting through it. Only a death resets them.
+- **The city changes type every five levels.** You cross a **Neon Metro** (dense lit blocks), a
+  **Timber Village** (low cottages, fences, dirt lanes, a lot of open ground), **Forest Clearings**
+  (mostly trees, very few walls), a **Future City** (tall glass towers, wide plazas) and a **Rubble
+  District** (half emptied streets, dumped crates). The type drives how much of the map is built
+  over, how tall the blocks stand and how many trees grow between them, and the palette moves with
+  it — plus a per city hue drift, so neighbouring cities never look alike. The type is also named
+  on the HUD, because a forest has very little cover and a future city towers over you.
+- **The first time tour.** Pressing Play for the first time opens a six step tutorial over the menu
+  that covers movement, the clue trail, the puzzles, the border pass, the carried bars and the
+  guards. It can be skipped, and replayed any time from **Settings → Watch the tour again** or from
+  the manual.
+- Collect **$DLI** tokens scattered around the streets: walk over one and it is **pocketed on
+  contact**, with no keypress and no prompt (they disappear once picked up).
 - **Opening help only**: at City 1–5 the first **two** clues of a chain are also pointed at with a
   compass arrow and a live block count, and the riddle names a direction ("the bar, 17 blocks
   east"). From City 6 onward that extra help is gone: the hint line and signal meter replace it.
 - **Guards patrol** with vision cones. They're sharper at night — hide (H) in bushes and crates,
   or slip past. Getting caught costs you the day.
+- **Guards get stronger, and change trade, as you push east.** Five ranks (patrol, sentry, warden,
+  marshal, enforcer) scale with the region, and every third guard is a **captain** (gold helmet,
+  faster, wider stare). From **City 6** patrols also specialise, and each one wears its job: a
+  **long** watcher with a raised lantern sees far down a street, a **wide** watcher with a shoulder
+  torch sweeps a whole corner, and from **City 11** some guards carry a weapon and will **shoot**
+  you from range — they stop in the open, fire on a reload timer, and the damage grows with the
+  city. There is no way to fight back: break the line of sight behind a building, a bush, a crate or
+  a dumpster (H hides instantly). Enough rounds will drop you, and the HUD warns with **UNDER
+  FIRE** while a round is in the air.
 - **Sleep on benches** — nights on the street take a toll.
 - Days get shorter and guards get meaner as you push east. From **City 30** puzzles get harder.
 - Every city is **bigger than the last** (38x30 tiles out of the gate, 84x66 by the border) and
@@ -66,7 +90,11 @@ run, tap the action buttons on the right.
 
 The world is a **neon dusk city**, not a blackout: mid-tone indigo/teal street palettes per region,
 bright lit windows, glowing rims on every interactive prop, magenta/cyan accents and soft
-red-orange guard cones.
+red-orange guard cones. On top of the region palette, each city is painted through its **type**
+(metro / village / forest / future / rubble) and then given its own hue drift, so a village reads as
+warm timber and dirt next to a metro's violet glass — see `ARCHETYPES` and `paletteForCity` in
+`src/game/city.ts`. Skyline height is part of the same number: a village block is a low cottage and
+a future block is a tower, from one `height` multiplier in the tile renderer.
 
 The city is drawn as **raised blocks, not flat squares**. Every building tile carries a lit roof
 face, a two tone parapet ring, skylights and rooftop clutter (AC units, hatches, water tanks over a
@@ -144,12 +172,24 @@ the browser console, or from the preview tooling:
 await window.__dilimaze.runSelfTest()
 ```
 
-80 checks, ~2s, all wired to the real modules (no mocks). It covers:
+101 checks, ~3s, all wired to the real modules (no mocks). It covers:
 
 - **Generation** — all 100 cities: map size matches the curve and grows monotonically, clue count
   matches the ramp, every clue points at a real unique landmark, every riddle/hint is present,
   every puzzle is internally solvable (the scrambled board really is an anagram of the answer),
   every city has guards *and* somewhere to hide, and generation is deterministic but varied.
+- **Clue variety** — no riddle repeats inside a city's chain, two neighbouring cities never share a
+  riddle, and the locator hints are reworded rather than stamped out (measured: ~398 distinct
+  riddles and ~525 distinct locator lines across the 564 clues of a full run).
+- **City types & colour** — the type holds for five levels and then turns, no region repeats a
+  type, all five types are actually built, every palette the renderer parses is a six digit hex,
+  and **neighbouring cities are painted differently** across all 99 crossings.
+- **Guard roles & ranged fire** — the opening cities field brawlers only, a deep city fields a
+  shooter, all four roles appear across the run, a long watcher's cone really is longer and a wide
+  watcher's really is wider than a brawler's, a shooter takes health off the runner at range,
+  enough rounds put them down, and the death is reported as gunfire rather than starvation.
+- **Carried bars** — crossing a border keeps hunger, thirst and health to the point, while the new
+  city still opens on a fresh Day 1 morning clock.
 - **Solvability** — a flood fill from the spawn reaches every clue and the gate in all 100 cities.
   Generation also reserves the spawn and gate tiles, refuses to let clutter seal a pocket, and
   runs a repair pass, so `solvabilityFixes` should stay 0.
@@ -171,7 +211,9 @@ await window.__dilimaze.runSelfTest()
 - **Saves & security** — round-trip fidelity, an honest save is never flagged, legacy
   fingerprint-less saves are accepted, legacy-migrated saves (high `bestCity`, low clears) are
   **not** wiped, hand-edited and plausibly-edited saves **are** caught, corrupt/oversized payloads
-  are rejected fast, `Object.prototype` can't be polluted, and names are sanitized.
+  are rejected fast, `Object.prototype` can't be polluted, names are sanitized, and the first time
+  tour flag round-trips without being mistaken for a tampered save (it is deliberately outside the
+  fingerprint, so saves written before the tutorial existed are still accepted).
 
 If you are running it by hand, do it from the menu rather than mid-run: it writes to
 `localStorage` while testing and restores your save afterwards.
@@ -183,7 +225,8 @@ src/
   game/
     brand.ts      Dlicom brand kit: names, colors, avatar skins (+ art + sprite hook)
     character.ts  the ONLY place the mascot is drawn — art, tints, poses, preview
-    city.ts       5 regions x 20 cities, generation, clue chains, hints, solvability guard
+    city.ts       5 regions x 20 cities, 5 city types, per city palettes, generation, clue chains,
+                  hints, guard ranks + trades, solvability guard
     engine.ts     game loop, player, guards, survival, clues, day arc, level timer, checkpoints
     render.ts     neon canvas world renderer: raised 3D blocks, street design, props
     profile.ts    localStorage profile, integrity fingerprint, migration, sanitisation
@@ -201,13 +244,14 @@ src/
     MainMenu.tsx    the hub: Play or Continue, Settings, How to play?, Ranking, world map
     Settings.tsx    rename the runner, swap the avatar, reset the profile
     HowToPlay.tsx   the in-game manual
+    Tutorial.tsx    the first time tutorial (six steps, inline SVG art)
     Ranking.tsx     fastest clear per level + best full runs
     WorldMap.tsx    region/city select with fogged unreached cities + region lore files
     GlitchText.tsx  scrambled-until-unlocked copy
     HUD.tsx         HUD, foldable clue bar + riddle + locator hint, signal meter, toasts
     Menus.tsx       dialog / puzzle / caught / cleared / victory overlays
     TouchControls.tsx  joystick + action buttons
-  App.tsx  screen flow: onboarding → menu → (settings | how to play | ranking | map) → game
+  App.tsx  screen flow: onboarding → menu → (settings | how to play | ranking | map | tutorial) → game
   index.css  Dlicom neon theme (mirrors brand.ts colors)
 ```
 
@@ -228,10 +272,18 @@ src/
 - Difficulty ramp: opening clues sit close together with explicit directions at City 1–5, then
   scatter and go vague; puzzles from City 4, harder from City 30
 - Cities grow every level (38x30 → 84x66) and hide more clues (2 → 9)
-- Survival loop: hunger, thirst, health, $DLI, shops, market stalls, fountains, benches, sleep
+- Five city types that change every 5 levels (metro / village / forest / future / rubble), each one
+  reshaping block density, skyline height and street clutter, with a per city colour drift on top of
+  the region palette
+- Survival loop: hunger, thirst, health, $DLI, shops, market stalls, fountains, benches, sleep,
+  with all three bars carried across every border
+- A first time tutorial over the menu: six steps, inline art, skippable, replayable from Settings
+  and the manual
 - Pickups and spent props read as such: collected clues get a green check, talked-to landmarks
   get crossed out, searched bins sit open and empty, shut houses go dark, $DLI tokens vanish
 - Guard patrols, vision cones, chase/search, hiding, climbing
+- Five guard ranks plus captains, four patrol trades (brawler, long watcher, wide watcher, shooter),
+  tracers, muzzle flashes and a red hit flash on screen when a round lands
 - A day arc: each city opens in full sun at 06:00 and darkens into violet night as the play goes on
 - Main menu after naming: Play, Settings, How to play? and Ranking, with Continue and Start new
   run for a returning player
@@ -250,7 +302,8 @@ src/
 
 - **Brand colors** — `BRAND.colors` in `src/game/brand.ts` are eyeballed from the mascot art.
   Change the hexes there and the entire game re-themes. Region street palettes live in
-  `REGIONS` in `src/game/city.ts`.
+  `REGIONS`, and the five city types (their palettes, block density, skyline height and street
+  clutter) live in `ARCHETYPES`, both in `src/game/city.ts`.
 - **Display fonts** — `src/assets/youre-gone.otf` (You're Gone by 1001 Fonts, public domain) is
   caps-only, so it's applied to uppercase UI and canvas labels via `DISPLAY` in `render.ts`.
   Popup/dialog copy uses `src/assets/the-bomb-sound.otf` (`--font-popup`). Swap either file and

@@ -60,6 +60,7 @@ export function render(ctx: CanvasRenderingContext2D, game: Game, viewW: number,
 
   drawGuardCones(ctx, world)
   for (const gd of world.guards) drawGuard(ctx, gd, r)
+  drawShots(ctx, world)
 
   // the hero usually sits on bright ground now, so give them a contact glow
   // that keeps the silhouette readable against neon-lit asphalt
@@ -152,6 +153,16 @@ export function render(ctx: CanvasRenderingContext2D, game: Game, viewW: number,
     grad.addColorStop(0.5, `rgba(150, 90, 220, ${0.2 * darkness})`)
     grad.addColorStop(1, 'rgba(0,0,0,0)')
     ctx.fillStyle = grad
+    ctx.fillRect(0, 0, viewW, viewH)
+  }
+
+  // a landed round throws a red edge across the screen so a hit is never missed
+  if (game.hitFlash > 0) {
+    const a = Math.min(1, game.hitFlash)
+    const hurt = ctx.createRadialGradient(viewW / 2, viewH / 2, Math.min(viewW, viewH) * 0.25, viewW / 2, viewH / 2, Math.max(viewW, viewH) * 0.7)
+    hurt.addColorStop(0, 'rgba(255, 40, 70, 0)')
+    hurt.addColorStop(1, `rgba(255, 30, 60, ${0.55 * a})`)
+    ctx.fillStyle = hurt
     ctx.fillRect(0, 0, viewW, viewH)
   }
 
@@ -271,8 +282,16 @@ function drawTiles(
       const py = y * TS
       const southOpen = at(x, y + 1) !== 'building'
       const eastOpen = at(x + 1, y) !== 'building'
-      // a 2x2 chunk shares one height, so a block reads as one building
-      const wall = WALL_STEPS[Math.floor(tileHash(x >> 1, y >> 1) * WALL_STEPS.length) % WALL_STEPS.length]
+      // a 2x2 chunk shares one height, so a block reads as one building. The
+      // city type stretches or squashes the whole skyline: villages are low
+      // cottages, future cities are towers.
+      const wall = Math.max(
+        6,
+        Math.round(
+          WALL_STEPS[Math.floor(tileHash(x >> 1, y >> 1) * WALL_STEPS.length) % WALL_STEPS.length] *
+            (world.archetype?.height ?? 1),
+        ),
+      )
 
       // contact shadow on the street the block stands on
       if (southOpen) {
@@ -1107,6 +1126,73 @@ function drawGuard(ctx: CanvasRenderingContext2D, gd: Guard, r: Region) {
   ctx.moveTo(gd.x + Math.cos(gd.dir) * 6, hip + Math.sin(gd.dir) * 6)
   ctx.lineTo(gd.x + Math.cos(gd.dir) * 15, hip + Math.sin(gd.dir) * 15)
   ctx.stroke()
+
+  /* ---- role gear: what a patrol does is visible before it sees you ---- */
+  if (gd.role === 'gun') {
+    // a drawn weapon along the facing line, with the muzzle lamp lit
+    ctx.save()
+    ctx.translate(gd.x, hip)
+    ctx.rotate(gd.dir)
+    ctx.fillStyle = '#171b2b'
+    ctx.fillRect(3, -1.7, 12, 3.4)
+    ctx.fillStyle = art.plate
+    ctx.fillRect(5, -2.6, 4, 1.6)
+    ctx.fillStyle = withAlpha(gd.flash > 0 ? '#fff0c0' : art.visor, 0.95)
+    ctx.fillRect(13, -1.1, 3.2, 2.2)
+    ctx.restore()
+  } else if (gd.role === 'long') {
+    // a lantern raised on a pole: the long, narrow stare, made obvious
+    ctx.fillStyle = art.plate
+    ctx.fillRect(gd.x + 6.2 * s, headY - 12 * s, 1.7 * s, 12 * s)
+    ctx.fillStyle = withAlpha(glow, 0.95)
+    ctx.shadowColor = glow
+    ctx.shadowBlur = 14
+    ctx.beginPath()
+    ctx.arc(gd.x + 7 * s, headY - 13 * s, 2.8 * s, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.shadowBlur = 0
+  } else if (gd.role === 'wide') {
+    // a shoulder torch throwing a broad arc, matching the wide cone
+    ctx.strokeStyle = withAlpha(glow, 0.7)
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.arc(gd.x, shoulder, 9 * s, -Math.PI * 0.92, -Math.PI * 0.28)
+    ctx.stroke()
+    ctx.fillStyle = withAlpha(glow, 0.85)
+    ctx.beginPath()
+    ctx.arc(gd.x + 5 * s, shoulder - 6 * s, 2.4 * s, 0, Math.PI * 2)
+    ctx.fill()
+  }
+}
+
+/**
+ * A guard mid shot: a hot tracer from the muzzle to whatever it aimed at, lit
+ * only for the flash window so the street does not gain a permanent laser show.
+ */
+function drawShots(ctx: CanvasRenderingContext2D, world: World) {
+  for (const gd of world.guards) {
+    if (gd.flash <= 0 || !gd.shotAt) continue
+    const a = Math.min(1, gd.flash / 0.18)
+    const s = 1 + gd.tier * 0.07 + (gd.captain ? 0.07 : 0)
+    const hip = gd.y + 9 * s - 6.5 * s
+    const bx = gd.x + Math.cos(gd.dir) * 13
+    const by = hip + Math.sin(gd.dir) * 13
+    ctx.save()
+    ctx.globalAlpha = a
+    ctx.strokeStyle = '#ffd7a8'
+    ctx.shadowColor = '#ff5c5c'
+    ctx.shadowBlur = 14
+    ctx.lineWidth = 2.2
+    ctx.beginPath()
+    ctx.moveTo(bx, by)
+    ctx.lineTo(gd.shotAt.x, gd.shotAt.y)
+    ctx.stroke()
+    ctx.fillStyle = '#fff2cc'
+    ctx.beginPath()
+    ctx.arc(bx, by, 4.5 * a + 1, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.restore()
+  }
 }
 
 function drawGuardCones(ctx: CanvasRenderingContext2D, world: World) {

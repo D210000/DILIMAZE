@@ -402,6 +402,180 @@ function progressionTests(s: Suite): void {
 }
 
 /* ------------------------------------------------------------------ */
+/* city types, colours, ranged guards, carried bars, the tutorial      */
+/* ------------------------------------------------------------------ */
+
+function cityTypeTests(s: Suite): void {
+  // ---- the type turns every five levels, and never repeats in a region ----
+  const types = Array.from({ length: 100 }, (_, i) => generateCity(i + 1).archetype.id)
+  // each five level block is one type all the way through, and each block turns
+  let turnsOk = true
+  let turnDetail = ''
+  for (let block = 0; block < 20; block++) {
+    for (let i = 1; i < 5; i++) {
+      if (types[block * 5 + i] !== types[block * 5]) {
+        turnsOk = false
+        turnDetail = `city ${block * 5 + i + 1} broke its five level block`
+        break
+      }
+    }
+    if (!turnsOk) break
+    if (block < 19 && types[block * 5] === types[(block + 1) * 5]) {
+      turnsOk = false
+      turnDetail = `blocks ${block + 1} and ${block + 2} are both ${types[block * 5]}`
+      break
+    }
+  }
+  s.check('the city type holds for five levels and then turns', turnsOk, turnDetail || '20 blocks, all turning')
+
+  // a region is four blocks wide, so it shows four of the five types and no repeat
+  let regionOk = true
+  let regionDetail = ''
+  const blocksPerRegion = CITIES_PER_REGION / 5
+  for (let region = 0; region < 100 / CITIES_PER_REGION; region++) {
+    const shown = new Set<string>()
+    for (let k = 0; k < blocksPerRegion; k++) shown.add(types[(region * blocksPerRegion + k) * 5])
+    if (shown.size !== blocksPerRegion) {
+      regionOk = false
+      regionDetail = `region ${region + 1} shows ${[...shown].join(', ')}`
+      break
+    }
+  }
+  s.check('no region repeats a city type', regionOk, regionDetail || `${blocksPerRegion} distinct types per region`)
+
+  const kinds = new Set(types)
+  s.check('every city type in the deck actually gets built', kinds.size >= 5, `${kinds.size} types: ${[...kinds].join(', ')}`)
+
+  // ---- each city gets its own paint on top of the type ----
+  let paintOk = true
+  let paintDetail = ''
+  for (let city = 1; city < 100; city++) {
+    const a = generateCity(city).region
+    const b = generateCity(city + 1).region
+    if (a.building === b.building && a.grass === b.grass && a.road === b.road) {
+      paintOk = false
+      paintDetail = `city ${city} and city ${city + 1} are painted identically`
+      break
+    }
+  }
+  s.check('neighbouring cities are painted differently', paintOk, paintDetail || '99 crossings, all distinct')
+
+  const sample = generateCity(1).region
+  s.check(
+    'every colour the renderer parses is a six digit hex',
+    [sample.grass, sample.road, sample.building, sample.buildingAlt, sample.accent, sample.neon, sample.neon2].every(
+      (c) => /^#[0-9a-f]{6}$/i.test(c),
+    ),
+    `${sample.building} / ${sample.neon}`,
+  )
+
+  // ---- guard roles ----
+  const early = generateCity(5).guards
+  s.check(
+    'the opening levels field brawlers only',
+    early.every((g) => g.role === 'beat'),
+    `${[...new Set(early.map((g) => g.role))].join(', ')}`,
+  )
+
+  let shooterCity = 0
+  for (let city = 11; city <= 100 && !shooterCity; city++) {
+    if (generateCity(city).guards.some((g) => g.role === 'gun')) shooterCity = city
+  }
+  s.check('a deep city fields a shooting guard', shooterCity > 0, shooterCity ? `first shooter in city ${shooterCity}` : 'no shooter found')
+
+  const rolesSeen = new Set<string>()
+  for (let city = 11; city <= 100; city++) for (const g of generateCity(city).guards) rolesSeen.add(g.role)
+  s.check(
+    'all four patrol roles appear across the run',
+    ['beat', 'long', 'wide', 'gun'].every((r) => rolesSeen.has(r)),
+    [...rolesSeen].sort().join(', '),
+  )
+
+  // a watcher's cone really is longer / wider than a brawler's (captains excluded,
+  // since a captain is deliberately a step above its own city)
+  const plain = generateCity(20).guards.filter((g) => !g.captain)
+  const best = (role: string, key: 'visionDist' | 'visionHalfAngle') =>
+    Math.max(0, ...plain.filter((g) => g.role === role).map((g) => g[key]))
+  s.check(
+    'a long watcher sees further than a brawler',
+    best('long', 'visionDist') > best('beat', 'visionDist'),
+    `${Math.round(best('long', 'visionDist'))} vs ${Math.round(best('beat', 'visionDist'))} px`,
+  )
+  s.check(
+    'a wide watcher covers more of a corner than a brawler',
+    best('wide', 'visionHalfAngle') > best('beat', 'visionHalfAngle'),
+    `${best('wide', 'visionHalfAngle').toFixed(2)} vs ${best('beat', 'visionHalfAngle').toFixed(2)} rad`,
+  )
+
+  // ---- a shooter hurts, and enough rounds put the runner down ----
+  if (shooterCity) {
+    const g = new Game(shooterCity, 0, 0, { profile: freshProfile('Target') })
+    const gunner = g.world.guards.find((x) => x.role === 'gun')
+    if (gunner) {
+      // solo the shooter, and hold it still so this tests the round, not a brawl
+      g.world.guards.length = 0
+      g.world.guards.push(gunner)
+      gunner.speed = 0
+      gunner.attackCd = 0
+      gunner.alert = 1
+      gunner.state = 'chase'
+      // the gate row is carved clear of buildings, so the line of sight is open
+      gunner.y = g.player.y
+      gunner.x = g.player.x + 4 * TS
+      gunner.dir = Math.atan2(g.player.y - gunner.y, g.player.x - gunner.x)
+      for (let i = 0; i < 60 && g.player.health === 100; i++) g.tick(0.05)
+      s.check(
+        'a shooting guard takes health off the runner at range',
+        g.player.health < 100,
+        `health ${Math.round(g.player.health)}`,
+      )
+      // the shooter has to reload between rounds, so this takes a while of game
+      // time, but it stops the moment the runner goes down
+      for (let i = 0; i < 1600 && g.status === 'playing'; i++) g.tick(0.05)
+      s.check('enough rounds put the runner down', g.status === 'collapsed', `status "${g.status}"`)
+      s.check('a death by gunfire says so, not that you starved', /shot/i.test(g.deathReason), `"${g.deathReason}"`)
+    } else {
+      s.check('the shooting city regenerates its shooter', false)
+    }
+  }
+
+  // ---- the three bars cross the border with you ----
+  const c = new Game(1, 0, 0, { profile: freshProfile('Carrier') })
+  c.world.guards.length = 0
+  c.player.hunger = 41
+  c.player.thirst = 27
+  c.player.health = 63
+  c.player.hasPass = true
+  c.player.x = (c.world.w - 1) * TS + 8
+  c.player.y = c.world.gate.y * TS
+  c.tick(1 / 60)
+  for (let i = 0; i < 40 && c.status === 'cityCleared'; i++) c.tick(0.1)
+  s.check('walking out the gate opens the next city', c.world.city === 2, `city ${c.world.city}`)
+  const kept = (v: number, was: number) => Math.abs(v - was) < 0.5
+  s.check(
+    'hunger, thirst and health carry across the border',
+    kept(c.player.hunger, 41) && kept(c.player.thirst, 27) && kept(c.player.health, 63),
+    `hunger ${Math.round(c.player.hunger)}, thirst ${Math.round(c.player.thirst)}, health ${Math.round(c.player.health)}`,
+  )
+  s.check(
+    'a new city still opens on a fresh morning clock',
+    c.day === 1 && c.daysInCity === 1,
+    `day ${c.day}/${c.daysInCity}`,
+  )
+
+  // ---- the first time tour flag ----
+  const fresh = freshProfile('Tut')
+  fresh.tutorialSeen = true
+  saveProfile(fresh)
+  const reloaded = loadProfile()
+  s.check(
+    'the tour flag saves, loads and does not read as a tampered save',
+    reloaded?.tutorialSeen === true && reloaded.tamperRecovered !== true,
+    reloaded ? `seen ${reloaded.tutorialSeen}, tamper ${reloaded.tamperRecovered === true}` : 'no profile',
+  )
+}
+
+/* ------------------------------------------------------------------ */
 /* survival + guards                                                   */
 /* ------------------------------------------------------------------ */
 
@@ -436,6 +610,34 @@ function survivalTests(s: Suite): void {
   s.check('eating restores hunger from inventory', g2.player.food === 0 && g2.player.hunger > 60, `hunger ${Math.round(g2.player.hunger)}`)
   g2.action('eat')
   s.check('eating with an empty bag is refused, not crashed', g2.player.food === 0)
+
+  // $DLI is picked up by contact, with no keypress and no standing prompt
+  const g3 = new Game(2, 0, 0, { profile: freshProfile('Collector') })
+  g3.world.guards.length = 0
+  const coin = g3.world.props.find((x) => x.kind === 'coin')
+  if (coin) {
+    // stand well away first, so the walk over it is what does the collecting
+    g3.player.x = coin.x - 5 * TS
+    g3.player.y = coin.y
+    g3.tick(1 / 60)
+    const before = g3.player.coins
+    for (let i = 0; i < 200 && !coin.used; i++) {
+      g3.setKey('KeyD', true)
+      g3.tick(1 / 60)
+    }
+    g3.setKey('KeyD', false)
+    s.check('walking over a $DLI token pockets it', coin.used && g3.player.coins > before, `${before} → ${g3.player.coins} $DLI`)
+    // and the standing prompt no longer asks for a keypress
+    g3.player.x = coin.x
+    g3.player.y = coin.y
+    s.check(
+      'a collected token stops prompting for a keypress',
+      !(g3.getSnapshot().promptText ?? '').includes('(E)'),
+      `prompt "${g3.getSnapshot().promptText}"`,
+    )
+  } else {
+    s.check('city 2 has a $DLI token to walk over', false)
+  }
 }
 
 function guardTests(s: Suite): void {
@@ -988,6 +1190,7 @@ export function runSelfTest(): SelfTestReport {
     generationTests(s)
     solvabilityTests(s)
     progressionTests(s)
+    cityTypeTests(s)
     survivalTests(s)
     guardTests(s)
     puzzleTests(s)

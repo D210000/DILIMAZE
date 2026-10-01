@@ -1,7 +1,9 @@
 import { RNG } from './rng'
 import type {
+  Archetype,
   Clue,
   Guard,
+  GuardRole,
   Prop,
   PropKind,
   Region,
@@ -95,6 +97,192 @@ export function regionIndexForCity(city: number): number {
 
 export function regionForCity(city: number): Region {
   return REGIONS[regionIndexForCity(city)]
+}
+
+/* ------------------------------------------------------------------ */
+/* city types                                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Every five levels the city changes type entirely: a neon downtown, a timber
+ * village, a forest of clearings, a chrome future city, a dust of ruins. The
+ * type is not just colour — it changes how much of the map is built over, how
+ * tall the blocks stand, how many trees grow between them, and what clutter
+ * ends up on the pavement.
+ */
+export const CITIES_PER_TYPE = 5
+
+export const ARCHETYPES: Archetype[] = [
+  {
+    id: 'metro',
+    name: 'Neon Metro',
+    blurb: 'dense blocks, lit glass, a corner on every street',
+    build: 0.86,
+    height: 1,
+    trees: 1,
+    palette: { grass: '#2b2a4e', road: '#4a5488', building: '#6a52b4', buildingAlt: '#413f7e' },
+    neon: { accent: '#ff4fb0', neon: '#ff5cc0', neon2: '#4fe4ff' },
+    blend: 0.35,
+  },
+  {
+    id: 'village',
+    name: 'Timber Village',
+    blurb: 'low cottages, fences, dirt lanes and a lot of open ground',
+    build: 0.6,
+    height: 0.6,
+    trees: 1.5,
+    palette: { grass: '#3d5433', road: '#8a7550', building: '#b5865c', buildingAlt: '#7d5c3c' },
+    neon: { accent: '#ffb45c', neon: '#ffc46a', neon2: '#ff8f5c' },
+    blend: 0.62,
+  },
+  {
+    id: 'forest',
+    name: 'Forest Clearings',
+    blurb: 'deep cover, dirt tracks, very few walls to hide behind',
+    build: 0.42,
+    height: 0.72,
+    trees: 3.4,
+    palette: { grass: '#20512f', road: '#4f6b45', building: '#4a7a52', buildingAlt: '#2f5c3a' },
+    neon: { accent: '#7dff9a', neon: '#6cff8c', neon2: '#d9ff6a' },
+    blend: 0.68,
+  },
+  {
+    id: 'future',
+    name: 'Future City',
+    blurb: 'glass towers, wide plazas and paper white light',
+    build: 0.9,
+    height: 1.5,
+    trees: 0.5,
+    palette: { grass: '#1e3a52', road: '#5d86a8', building: '#a9dcef', buildingAlt: '#5b87a6' },
+    neon: { accent: '#66f0ff', neon: '#7cf6ff', neon2: '#b98cff' },
+    blend: 0.6,
+  },
+  {
+    id: 'ruins',
+    name: 'Rubble District',
+    blurb: 'half the city is down, the other half is being emptied',
+    build: 0.54,
+    height: 0.8,
+    trees: 1.1,
+    palette: { grass: '#4a4438', road: '#8b8272', building: '#8f8574', buildingAlt: '#5c564a' },
+    neon: { accent: '#ff8f5c', neon: '#ffa06a', neon2: '#ffd24a' },
+    blend: 0.66,
+  },
+]
+
+/**
+ * The order of the types is rotated by region, so Region 2 does not open on the
+ * same type Region 1 opened on: city 1 is a metro, city 21 is rubble.
+ */
+export function archetypeForCity(city: number): Archetype {
+  const block = Math.floor((city - 1) / CITIES_PER_TYPE)
+  const region = Math.floor((city - 1) / CITIES_PER_REGION)
+  // A region is four five-level blocks wide, and the deck is dealt four at a
+  // time: every region sees four of the five types with no repeat inside it, and
+  // the turn of one type per region means City 1 and City 21 never match.
+  const perRegion = CITIES_PER_REGION / CITIES_PER_TYPE
+  return ARCHETYPES[(block % perRegion + region) % ARCHETYPES.length]
+}
+
+/**
+ * What each type leaves lying in the street, as a weight on the base chance.
+ * A village is fences and open ground, a forest is trees, a future city is clean
+ * plazas with vending stalls, and rubble is crates and dumped rubbish.
+ */
+const STREET_BIAS: Record<Archetype['id'], Partial<Record<PropKind, number>>> = {
+  metro: { tree: 1, crate: 1, fence: 1, dumpster: 1, trash: 1, coin: 1, stall: 1 },
+  village: { tree: 1.7, crate: 0.4, fence: 3.2, dumpster: 0.35, trash: 0.6, coin: 1, stall: 0.5 },
+  forest: { tree: 3.2, crate: 0.7, fence: 0.5, dumpster: 0.25, trash: 0.5, coin: 1, stall: 0.3 },
+  future: { tree: 0.35, crate: 0.6, fence: 0.25, dumpster: 0.4, trash: 0.5, coin: 1.4, stall: 2.2 },
+  ruins: { tree: 0.8, crate: 2, fence: 1.3, dumpster: 1.7, trash: 2.2, coin: 1, stall: 0.6 },
+}
+
+/* ------------------------------------------------------------------ */
+/* colour                                                              */
+/* ------------------------------------------------------------------ */
+
+function hexToRgb(hex: string): [number, number, number] {
+  const n = parseInt(hex.slice(1), 16)
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+}
+
+function rgbToHex(r: number, g: number, b: number): string {
+  const c = (v: number) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')
+  return `#${c(r)}${c(g)}${c(b)}`
+}
+
+function mixHex(a: string, b: string, t: number): string {
+  const [r1, g1, b1] = hexToRgb(a)
+  const [r2, g2, b2] = hexToRgb(b)
+  return rgbToHex(r1 + (r2 - r1) * t, g1 + (g2 - g1) * t, b1 + (b2 - b1) * t)
+}
+
+function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
+  const rn = r / 255
+  const gn = g / 255
+  const bn = b / 255
+  const max = Math.max(rn, gn, bn)
+  const min = Math.min(rn, gn, bn)
+  const l = (max + min) / 2
+  const d = max - min
+  if (d === 0) return [0, 0, l]
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min)
+  let h: number
+  if (max === rn) h = ((gn - bn) / d + (gn < bn ? 6 : 0)) / 6
+  else if (max === gn) h = ((bn - rn) / d + 2) / 6
+  else h = ((rn - gn) / d + 4) / 6
+  return [h * 360, s, l]
+}
+
+function hslToRgb(h: number, s: number, l: number): [number, number, number] {
+  const hue = (((h % 360) + 360) % 360) / 360
+  if (s === 0) {
+    const v = l * 255
+    return [v, v, v]
+  }
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s
+  const p = 2 * l - q
+  const f = (t: number) => {
+    let x = t
+    if (x < 0) x += 1
+    if (x > 1) x -= 1
+    if (x < 1 / 6) return p + (q - p) * 6 * x
+    if (x < 1 / 2) return q
+    if (x < 2 / 3) return p + (q - p) * (2 / 3 - x) * 6
+    return p
+  }
+  return [f(hue + 1 / 3) * 255, f(hue) * 255, f(hue - 1 / 3) * 255]
+}
+
+/** turn a colour round the wheel, keeping its saturation and brightness */
+function rotateHue(hex: string, deg: number): string {
+  const [r, g, b] = hexToRgb(hex)
+  const [h, s, l] = rgbToHsl(r, g, b)
+  const [r2, g2, b2] = hslToRgb(h + deg, s, l)
+  return rgbToHex(r2, g2, b2)
+}
+
+/**
+ * The palette one city is actually painted in: the region's colours, pulled
+ * toward the city type, then nudged round the wheel by a drift that only this
+ * city has. Two cities on the same street never look the same.
+ */
+export function paletteForCity(city: number): Region {
+  const base = REGIONS[regionIndexForCity(city)]
+  const type = archetypeForCity(city)
+  // deterministic -27..27 degrees, and a little more saturation for the loud types
+  const drift = (((city * 47) % 41) - 20) * 1.35
+  const paint = (from: string, toward: string) => rotateHue(mixHex(from, toward, type.blend), drift)
+  return {
+    ...base,
+    grass: paint(base.grass, type.palette.grass),
+    road: paint(base.road, type.palette.road),
+    building: paint(base.building, type.palette.building),
+    buildingAlt: paint(base.buildingAlt, type.palette.buildingAlt),
+    accent: paint(base.accent, type.neon.accent),
+    neon: paint(base.neon, type.neon.neon),
+    neon2: paint(base.neon2, type.neon.neon2),
+  }
 }
 
 // Scaling curve helpers -------------------------------------------------
@@ -418,6 +606,30 @@ function guardSpec(
 }
 
 /*
+ * What each patrol brings on top of its rank. The opening cities are fighters
+ * only; from City 6 the city starts fielding watchers, and from City 11 some of
+ * the patrols carry a weapon and will shoot you from across a street. Dealt out
+ * by index, so the roles stay mixed instead of leaving a city with no shooter at
+ * all for no reason the player can see.
+ */
+const EARLY_ROLES: GuardRole[] = ['beat', 'wide', 'long', 'beat']
+const FULL_ROLES: GuardRole[] = ['beat', 'wide', 'long', 'gun', 'beat', 'long', 'gun', 'wide']
+
+export function guardRoleFor(city: number, index: number): GuardRole {
+  if (city < 6) return 'beat'
+  if (city < 11) return EARLY_ROLES[(index + city) % EARLY_ROLES.length]
+  return FULL_ROLES[(index + city) % FULL_ROLES.length]
+}
+
+/** how the role bends a guard's eyes and legs before a captain is layered on */
+const ROLE_TRAITS: Record<GuardRole, { dist: number; half: number; speed: number }> = {
+  beat: { dist: 1.05, half: 0.95, speed: 1.12 },
+  long: { dist: 1.5, half: 0.72, speed: 0.92 },
+  wide: { dist: 0.8, half: 1.6, speed: 0.96 },
+  gun: { dist: 1.25, half: 0.9, speed: 0.95 },
+}
+
+/*
  * Riddles. A city deals them out like cards, one per clue, so a chain never
  * says the same thing twice, and the deck is rotated by 17 per city, which is
  * wider than the longest chain, so two cities in a row cannot share a line
@@ -522,7 +734,6 @@ export function generateCity(city: number, opts: { skipSolvabilityGuard?: boolea
   // Wording draws from its own stream: riddles and hints are not entangled with
   // the map, prop and patrol draws, so the copy can be reworded on its own.
   const text = new RNG(city * 104729 + 7)
-  const region = regionForCity(city)
   const { w, h } = mapSize(city)
   /** west-edge entry row === east-edge exit row */
   const gateRow = Math.floor(h / 2)
@@ -565,12 +776,16 @@ export function generateCity(city: number, opts: { skipSolvabilityGuard?: boolea
   }
   sidewalkify()
 
-  // fill blocks between roads with buildings + pockets of park
+  // fill blocks between roads: the city type decides how much of the space is
+  // built over. A metro is nearly all blocks; a forest is mostly clearings.
+  const type = archetypeForCity(city)
+  const openChance = Math.min(0.8, Math.max(0.12, 1 - type.build))
+  const parkShare = Math.min(0.85, 0.35 + (type.trees - 1) * 0.22)
   for (let y = 1; y < h - 1; y++)
     for (let x = 1; x < w - 1; x++) {
       if (tiles[idx(x, y)] !== 'grass') continue
-      if (rng.chance(0.16)) {
-        tiles[idx(x, y)] = rng.chance(0.35) ? 'park' : 'plaza'
+      if (rng.chance(openChance)) {
+        tiles[idx(x, y)] = rng.chance(parkShare) ? 'park' : 'plaza'
         continue
       }
       tiles[idx(x, y)] = 'building'
@@ -673,9 +888,12 @@ export function generateCity(city: number, opts: { skipSolvabilityGuard?: boolea
 
       const r = rng.next()
       if (t === 'park') {
-        if (r < 0.3) place('tree')
-        else if (r < 0.42) place('bush', { blocking: false, hide: true })
-        else if (r < 0.5) place('bench', { blocking: false })
+        // green spaces are the cover of a forest city and the trim of a metro
+        const treeP = Math.min(0.85, 0.3 * type.trees)
+        const bushP = treeP + Math.min(0.3, 0.12 * type.trees)
+        if (r < treeP) place('tree')
+        else if (r < bushP) place('bush', { blocking: false, hide: true })
+        else if (r < bushP + 0.08) place('bench', { blocking: false })
         continue
       }
       if (t === 'plaza' && r < 0.06) {
@@ -683,13 +901,25 @@ export function generateCity(city: number, opts: { skipSolvabilityGuard?: boolea
         continue
       }
       if (t === 'sidewalk' || t === 'road') {
-        if (r < 0.025) place('tree', { blocking: false })
-        else if (r < 0.045) place('crate', { climbable: true })
-        else if (r < 0.06) place('fence', { climbable: true })
-        else if (r < 0.07) place('dumpster', { climbable: true, hide: true })
-        else if (r < 0.085) place('trash', { blocking: false })
-        else if (r < 0.095) place('coin', { blocking: false })
-        else if (r < 0.105) place('stall')
+        // what gets left lying in the street is the city type talking
+        const w = STREET_BIAS[type.id]
+        const table: Array<[PropKind, Partial<Prop> | undefined, number]> = [
+          ['tree', { blocking: false }, 0.025 * (w.tree ?? 1)],
+          ['crate', { climbable: true }, 0.02 * (w.crate ?? 1)],
+          ['fence', { climbable: true }, 0.015 * (w.fence ?? 1)],
+          ['dumpster', { climbable: true, hide: true }, 0.01 * (w.dumpster ?? 1)],
+          ['trash', { blocking: false }, 0.015 * (w.trash ?? 1)],
+          ['coin', { blocking: false }, 0.01 * (w.coin ?? 1)],
+          ['stall', undefined, 0.01 * (w.stall ?? 1)],
+        ]
+        let mark = 0
+        for (const [kind, extra, chance] of table) {
+          mark += chance
+          if (r < mark) {
+            place(kind, extra)
+            break
+          }
+        }
       }
     }
 
@@ -732,12 +962,15 @@ export function generateCity(city: number, opts: { skipSolvabilityGuard?: boolea
     return { x: Math.floor(w / 2), y: Math.floor(h / 2) }
   }
 
-  const shops = Math.max(1, 2 + Math.floor(city / 25))
+  const shops = Math.max(1, Math.round((2 + Math.floor(city / 25)) * (type.id === 'future' ? 1.8 : type.id === 'forest' ? 0.6 : 1)))
   for (let i = 0; i < shops; i++) {
     const s = takeSpot()
     addProp('shop', s.x, s.y, { data: rng.chance(0.5) ? 'food' : 'water' })
   }
-  for (let i = 0; i < 2 + Math.floor(city / 20); i++) {
+
+  // villages are built out of houses; forests barely have any
+  const houses = Math.max(1, Math.round((2 + Math.floor(city / 20)) * (type.id === 'village' ? 2.4 : type.id === 'forest' ? 0.5 : 1)))
+  for (let i = 0; i < houses; i++) {
     const s = takeSpot()
     addProp('house', s.x, s.y, { data: rng.chance(0.6) ? 'food' : 'water', blocking: false })
   }
@@ -896,23 +1129,30 @@ export function generateCity(city: number, opts: { skipSolvabilityGuard?: boolea
       }
     }
     if (path.length === 0) path.push({ x: cx + 0.5, y: cy + 0.5 })
+    // the role bends the eyes and legs before the captain bonus is layered on
+    const role = guardRoleFor(city, i)
+    const traits = ROLE_TRAITS[role]
     guards.push({
       id: i,
       x: path[0].x,
       y: path[0].y,
       path,
       wp: 1 % path.length,
-      speed: spec.speed * (captain ? 1.12 : 1),
+      speed: spec.speed * traits.speed * (captain ? 1.12 : 1),
       state: 'patrol',
       alert: 0,
       dir: rng.float(0, Math.PI * 2),
       lastSeen: null,
       searchTimer: 0,
-      visionDist: spec.dist * TS * (captain ? 1.08 : 1),
-      visionHalfAngle: spec.half * (captain ? 1.06 : 1),
+      visionDist: Math.min(13 * TS, spec.dist * traits.dist * TS * (captain ? 1.08 : 1)),
+      visionHalfAngle: Math.min(1.1, spec.half * traits.half * (captain ? 1.06 : 1)),
       stuckTimer: 0,
       tier,
+      role,
       captain,
+      attackCd: 0,
+      flash: 0,
+      shotAt: null,
     })
   }
 
@@ -933,7 +1173,8 @@ export function generateCity(city: number, opts: { skipSolvabilityGuard?: boolea
     entryHint,
     clues,
     guards,
-    region,
+    region: paletteForCity(city),
+    archetype: type,
     dayLengthSec: Math.max(150, 240 - city),
     drainPerHour: { hunger: 0.9 * drainBase, thirst: 1.35 * drainBase },
     freeFood: props.filter((p) => p.data === 'food').length,

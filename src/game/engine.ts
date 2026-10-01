@@ -54,6 +54,10 @@ export interface Snapshot {
   totalDays: number
   nearSafehouse: boolean
   guardsAlerted: number
+  /** how many guards currently have a shot in the air */
+  shotsAtYou: number
+  /** the city type for this level (Neon Metro, Timber Village, ...) */
+  cityType: string
   /** who is on your heels right now, by rank or by count ('' when clear) */
   chasedBy: string
   /** avatar skin id (brand.ts registry) */
@@ -181,6 +185,9 @@ export class Game {
   private clearedThisSession = 0
   caughtTimer = 0
   deathReason = ''
+  /** 1 -> 0 after a guard lands a shot; the renderer paints a red flash with it */
+  hitFlash = 0
+  private shotToastCd = 0
   private keys = new Set<string>()
   private wantInteract = false
   private wantClimb = false
@@ -336,6 +343,10 @@ export class Game {
   }
 
   private update(dt: number) {
+    // transient effects keep ticking even while an overlay is up, so a shot
+    // flash never sticks to the screen after a death or a puzzle
+    if (this.hitFlash > 0) this.hitFlash = Math.max(0, this.hitFlash - dt * 1.6)
+    if (this.shotToastCd > 0) this.shotToastCd -= dt
     const playing =
       this.status === 'playing' || this.status === 'caught' || this.status === 'cityCleared' || this.status === 'collapsed'
     if (!playing) {
@@ -458,6 +469,7 @@ export class Game {
     p.vy += (targetVy - p.vy) * Math.min(1, dt * 12)
 
     this.moveWithCollision(p, dt)
+    this.collectCoins()
 
     if (p.moving) {
       p.facing = Math.atan2(axis.y, axis.x)
@@ -472,7 +484,12 @@ export class Game {
     if (p.hunger <= 0) p.health = Math.max(0, p.health - dt * 2.2)
     if (p.thirst <= 0) p.health = Math.max(0, p.health - dt * 3.2)
     if (p.health <= 0) {
-      this.deathReason = p.thirst <= 0 ? 'You died of thirst.' : 'You starved.'
+      this.deathReason =
+        p.thirst <= 0
+          ? 'You died of thirst.'
+          : p.hunger <= 0
+            ? 'You starved.'
+            : 'A guard shot you down in the street.'
       this.status = 'collapsed'
       this.caughtTimer = 2.2
       this.deaths++
@@ -556,6 +573,26 @@ export class Game {
         this.toast(`A ${guardRankName(gd)} spotted you!`, 'bad')
       }
 
+      // ---- ranged guards ----------------------------------------------
+      // A shooter only needs you lit up in its cone, not a full chase: it holds
+      // still and puts a round downrange. Long and wide watchers simply see much
+      // further / much wider than a brawler, and close in like everyone else.
+      if (gd.flash > 0) gd.flash = Math.max(0, gd.flash - dt)
+      if (gd.attackCd > 0) gd.attackCd = Math.max(0, gd.attackCd - dt)
+      if (gd.role === 'gun' && gd.alert > 0.4 && visible && gd.attackCd <= 0 && dist > 2.2 * TS) {
+        gd.attackCd = Math.max(0.8, 1.95 - gd.tier * 0.12 - this.world.city * 0.004)
+        gd.flash = 0.18
+        gd.shotAt = { x: p.x, y: p.y }
+        // the round hurts more the deeper east you have come
+        const dmg = 4 + gd.tier * 1.6 + Math.floor(this.world.city / 10) * 1.4 + (gd.captain ? 3 : 0)
+        p.health = Math.max(0, p.health - dmg)
+        this.hitFlash = 1
+        if (this.shotToastCd <= 0) {
+          this.shotToastCd = 3.5
+          this.toast(`The ${guardRankName(gd)} is shooting at you! Find cover.`, 'bad')
+        }
+      }
+
       switch (gd.state) {
         case 'suspicious':
           gd.searchTimer -= dt
@@ -570,21 +607,25 @@ export class Game {
           const d = Math.hypot(dx, dy) || 1
           const vx = (dx / d) * spd
           const vy = (dy / d) * spd
+          // a shooter holds its ground in the open and fires instead of closing
+          const holding = gd.role === 'gun' && visible && dist < gd.visionDist * 0.92
           const before = { x: gd.x, y: gd.y }
-          if (!this.guardSolidMove(gd, vx * dt, vy * dt)) {
-            gd.stuckTimer += dt
-            if (gd.stuckTimer > 0.8) {
-              // slide around obstacles
-              const s = Math.sign(vy) || 1
-              this.guardSolidMove(gd, 0, s * spd * dt)
-              if (Math.hypot(gd.x - before.x, gd.y - before.y) < 0.5) this.guardSolidMove(gd, s * spd * dt, 0)
-              if (gd.stuckTimer > 2.5) {
-                gd.state = 'search'
-                gd.searchTimer = 2.5
-                gd.stuckTimer = 0
+          if (!holding) {
+            if (!this.guardSolidMove(gd, vx * dt, vy * dt)) {
+              gd.stuckTimer += dt
+              if (gd.stuckTimer > 0.8) {
+                // slide around obstacles
+                const s = Math.sign(vy) || 1
+                this.guardSolidMove(gd, 0, s * spd * dt)
+                if (Math.hypot(gd.x - before.x, gd.y - before.y) < 0.5) this.guardSolidMove(gd, s * spd * dt, 0)
+                if (gd.stuckTimer > 2.5) {
+                  gd.state = 'search'
+                  gd.searchTimer = 2.5
+                  gd.stuckTimer = 0
+                }
               }
-            }
-          } else gd.stuckTimer = 0
+            } else gd.stuckTimer = 0
+          }
           gd.dir = Math.atan2(dy, dx)
           if (dist < 18 && !p.hidden) {
             this.caught(gd)
@@ -645,6 +686,24 @@ export class Game {
         gd.state = 'suspicious'
         gd.searchTimer = 1.5
       }
+    }
+  }
+
+  /**
+   * $DLI is pocketed on contact: no keypress, no prompt, just walk over it. The
+   * tokens sit on the pavement as bait in the open, so having to stop and press
+   * E made a pickup a small stealth risk for no good reason.
+   */
+  private collectCoins() {
+    const p = this.player
+    const reach = 0.9 * TS
+    for (const prop of this.world.props) {
+      if (prop.kind !== 'coin' || prop.used) continue
+      if ((prop.x - p.x) ** 2 + (prop.y - p.y) ** 2 > reach * reach) continue
+      prop.used = true
+      const dli = this.rng.int(2, 5)
+      p.coins += dli
+      this.toast(`+${dli} $DLI`, 'good')
     }
   }
 
@@ -725,8 +784,6 @@ export class Game {
         return p.data === 'food' ? 'Ask for food (E)' : 'Ask for water (E)'
       case 'trash':
         return 'Search trash (E). Risky'
-      case 'coin':
-        return 'Pick up $DLI (E)'
       case 'board':
       case 'bar':
       case 'kid':
@@ -1175,15 +1232,26 @@ export class Game {
       return
     }
 
-    // carry the runner's hard-earned resources (DLI, food, water) into the next
-    // city — only a death (`restartCity`) wipes them. Survival bars reset so the
-    // fresh city opens on a clean day.
-    const carry = { coins: this.player.coins, food: this.player.food, water: this.player.water }
+    // Everything the runner is carrying crosses the border with them: DLI, food,
+    // water, and the survival bars themselves. Entering a new city is not a rest
+    // stop — the clock resets to morning, but hunger, thirst and health carry on
+    // exactly where they were. Only a death (`restartCity`) wipes them.
+    const carry = {
+      coins: this.player.coins,
+      food: this.player.food,
+      water: this.player.water,
+      hunger: this.player.hunger,
+      thirst: this.player.thirst,
+      health: this.player.health,
+    }
     this.world = generateCity(next)
     this.player = this.makePlayer()
     this.player.coins = carry.coins
     this.player.food = carry.food
     this.player.water = carry.water
+    this.player.hunger = carry.hunger
+    this.player.thirst = carry.thirst
+    this.player.health = carry.health
     this.day = 1
     this.daysInCity = 1
     this.timeSec = 0
@@ -1191,7 +1259,7 @@ export class Game {
     this.saveAccum = 0
     this.checkpoint()
     this.toast(
-      `City ${next}: ${this.world.region.name}. ${next === 100 ? 'THE LAST CITY. Almost free!' : 'Find the clue trail.'}`,
+      `City ${next}: ${this.world.region.name}, a ${this.world.archetype.name}. ${next === 100 ? 'THE LAST CITY. Almost free!' : 'Find the clue trail.'}`,
       'info',
     )
     // a full region cleared: hand over its lore snippet
@@ -1249,6 +1317,8 @@ export class Game {
       totalDays: this.totalDays,
       nearSafehouse: this.nearSafehouse,
       guardsAlerted: chasing.length,
+      shotsAtYou: this.world.guards.filter((g) => g.flash > 0).length,
+      cityType: this.world.archetype.name,
       chasedBy:
         chasing.length === 0
           ? ''

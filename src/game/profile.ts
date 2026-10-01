@@ -72,6 +72,12 @@ export interface Profile {
   /** regionId -> lore snippet unlocked (all 20 cities of that region cleared) */
   lore: Record<string, boolean>
   onboarded: boolean
+  /**
+   * true once the first-time tutorial has been played through. Deliberately NOT
+   * part of the fingerprint below: it only gates a hint screen, so reads as a
+   * normal field on saves written before the tutorial existed.
+   */
+  tutorialSeen?: boolean
   /** set when a corrupt save was replaced — the UI mentions it once */
   corruptRecovered?: boolean
   /** set when an edited save failed its integrity check */
@@ -157,6 +163,7 @@ export function freshProfile(name = 'Runner', skin = DEFAULT_SKIN_ID): Profile {
     settings: { sound: true },
     lore: {},
     onboarded: false,
+    tutorialSeen: false,
   }
 }
 
@@ -227,6 +234,7 @@ function normalize(p: Profile): Profile {
   p.settings = { sound: p.settings.sound !== false }
   p.lore = cleanLore(p.lore)
   p.onboarded = p.onboarded === true
+  p.tutorialSeen = p.tutorialSeen === true
   // structural repair, never destructive: a resumable run must belong to a city
   // already reached. (Progress is only ever wiped by an exact fingerprint
   // mismatch below — heuristics must never delete a real player's save.)
@@ -296,6 +304,7 @@ function sanitize(raw: unknown): Profile | null {
     settings: { sound: settings.sound !== false },
     lore,
     onboarded: d.onboarded === true,
+    tutorialSeen: d.tutorialSeen === true,
   })
 
   // integrity: the one and only destructive path. A present, current-generation

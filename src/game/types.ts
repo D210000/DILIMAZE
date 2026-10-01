@@ -64,6 +64,15 @@ export interface Clue {
   puzzle: Puzzle | null
 }
 
+/**
+ * What a patrol brings on top of its rank:
+ *  - `beat` — a brawler, quick on its feet, normal stare;
+ *  - `long` — a watcher with a narrow stare that reaches a long way down a street;
+ *  - `wide` — a watcher that sweeps most of a corner at once;
+ *  - `gun`  — a shooter: holds its ground and fires down the cone from range.
+ */
+export type GuardRole = 'beat' | 'long' | 'wide' | 'gun'
+
 export interface Guard {
   id: number
   x: number
@@ -72,6 +81,8 @@ export interface Guard {
   wp: number
   /** 0..4 — one step per region: what the patrol can do AND what it looks like */
   tier: number
+  /** how this patrol fights, see GuardRole */
+  role: GuardRole
   /** the one guard in a handful that wears captain colours and hits harder */
   captain: boolean
   speed: number
@@ -83,6 +94,12 @@ export interface Guard {
   visionDist: number
   visionHalfAngle: number
   stuckTimer: number
+  /** seconds until a shooter may fire again (0 for everyone else) */
+  attackCd: number
+  /** how long the muzzle flash / tracer stays lit, in seconds */
+  flash: number
+  /** where the last shot was aimed, while `flash` burns */
+  shotAt: Vec | null
 }
 
 export interface Region {
@@ -104,6 +121,32 @@ export interface Region {
   neon2: string
 }
 
+export type ArchetypeId = 'metro' | 'village' | 'forest' | 'future' | 'ruins'
+
+/**
+ * The look of a city, changed every five levels. The type decides how the map
+ * is built (how many blocks stand, how tall they are, how many trees) and what
+ * colours it is painted in; the per-city hue drift on top of that means no two
+ * cities in a run read the same.
+ */
+export interface Archetype {
+  id: ArchetypeId
+  name: string
+  /** one line shown when the city opens */
+  blurb: string
+  /** share of open blocks that become buildings (the rest turn to park/plaza) */
+  build: number
+  /** how tall the blocks stand, as a multiple of the normal wall height */
+  height: number
+  /** relative weight of trees in the scattered cover */
+  trees: number
+  /** the palette this type pulls the region toward */
+  palette: { grass: string; road: string; building: string; buildingAlt: string }
+  neon: { accent: string; neon: string; neon2: string }
+  /** 0..1 — how far the type palette overrides the region palette */
+  blend: number
+}
+
 export interface World {
   city: number
   w: number
@@ -117,7 +160,10 @@ export interface World {
   entryHint: string
   clues: Clue[]
   guards: Guard[]
+  /** the base region, plus the city type and this city's own colour drift */
   region: Region
+  /** the type of city this level is: it changes every CITIES_PER_TYPE levels */
+  archetype: Archetype
   dayLengthSec: number
   drainPerHour: { hunger: number; thirst: number }
   freeFood: number

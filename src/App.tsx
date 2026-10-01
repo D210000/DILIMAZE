@@ -12,9 +12,15 @@ import { Onboarding } from './ui/Onboarding'
 import { Ranking } from './ui/Ranking'
 import { Settings } from './ui/Settings'
 import { TouchControls } from './ui/TouchControls'
+import { Tutorial } from './ui/Tutorial'
 import { WorldMap } from './ui/WorldMap'
 
-type Screen = 'booting' | 'onboarding' | 'menu' | 'settings' | 'howto' | 'ranking' | 'map' | 'game'
+type Screen = 'booting' | 'onboarding' | 'menu' | 'settings' | 'howto' | 'ranking' | 'map' | 'game' | 'tutorial'
+
+/** what to do once the tutorial finishes: start this run, or go back to a menu */
+interface TutorialIntent {
+  launch: { city: number; fresh: boolean } | null
+}
 
 const ENGINE_READY = typeof window !== 'undefined'
 
@@ -33,6 +39,8 @@ export default function App() {
   const [recovered] = useState(() => boot?.corruptRecovered === true)
   const [tampered] = useState(() => boot?.tamperRecovered === true)
   const [storageOk] = useState(() => (ENGINE_READY ? storageAvailable() : false))
+  /** set while the first time tour is up, holding the run it should hand over to */
+  const [tut, setTut] = useState<TutorialIntent | null>(null)
 
   /* ---------------- boot: load or start a profile ---------------- */
 
@@ -185,6 +193,33 @@ export default function App() {
     [mountGame],
   )
 
+  /**
+   * Play. A player who has never seen the tour gets it first, once, before their
+   * run starts; everyone else goes straight in. Replayable from Settings and the
+   * manual, where it closes back to the menu instead of launching anything.
+   */
+  const startRun = useCallback(
+    (city: number, fresh = false) => {
+      const prof = profileRef.current
+      if (prof && prof.tutorialSeen !== true) {
+        setTut({ launch: { city, fresh } })
+        setScreen('tutorial')
+        return
+      }
+      launch(city, fresh)
+    },
+    [launch],
+  )
+
+  const finishTutorial = useCallback(() => {
+    const prof = profileRef.current
+    if (prof && prof.tutorialSeen !== true) persist({ tutorialSeen: true })
+    const target = tut?.launch ?? null
+    setTut(null)
+    if (target) launch(target.city, target.fresh)
+    else setScreen('menu')
+  }, [launch, persist, tut])
+
   const backToMenu = useCallback(() => {
     gameRef.current?.saveNow()
     unsubscribe.current?.()
@@ -248,8 +283,8 @@ export default function App() {
           profile={profile}
           storageOk={storageOk}
           fresh={freshRunner}
-          onPlay={() => launch(profile.run?.city ?? profile.bestCity, false)}
-          onNewRun={() => launch(1, true)}
+          onPlay={() => startRun(profile.run?.city ?? profile.bestCity, false)}
+          onNewRun={() => startRun(1, true)}
           onOpenMap={() => setScreen('map')}
           onSettings={() => setScreen('settings')}
           onHowToPlay={() => setScreen('howto')}
@@ -257,12 +292,18 @@ export default function App() {
         />
       )}
 
+      {screen === 'tutorial' && tut && <Tutorial replay={tut.launch === null} onDone={finishTutorial} />}
+
       {screen === 'settings' && profile && (
         <Settings
           profile={profile}
           storageOk={storageOk}
           onRename={(name) => persist({ name })}
           onChangeSkin={(skin) => persist({ skin })}
+          onReplayTutorial={() => {
+            setTut({ launch: null })
+            setScreen('tutorial')
+          }}
           onBack={() => setScreen('menu')}
           onReset={() => {
             resetProfile()
@@ -275,7 +316,15 @@ export default function App() {
         />
       )}
 
-      {screen === 'howto' && <HowToPlay onBack={() => setScreen('menu')} />}
+      {screen === 'howto' && (
+        <HowToPlay
+          onBack={() => setScreen('menu')}
+          onTutorial={() => {
+            setTut({ launch: null })
+            setScreen('tutorial')
+          }}
+        />
+      )}
 
       {screen === 'ranking' && profile && <Ranking profile={profile} onBack={() => setScreen('menu')} />}
 
@@ -283,7 +332,7 @@ export default function App() {
         <WorldMap
           profile={profile}
           onClose={() => setScreen('menu')}
-          onStartCity={(city) => launch(city, false)}
+          onStartCity={(city) => startRun(city, false)}
         />
       )}
 

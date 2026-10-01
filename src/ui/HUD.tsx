@@ -54,6 +54,7 @@ export function HUD({ snap }: { snap: Snapshot }) {
         <div className="hud-title">
           CITY {snap.city}/100 <span className="hud-sep">·</span> {snap.region.toUpperCase()}
         </div>
+        <div className="hud-type">{snap.cityType.toUpperCase()}</div>
         <div className="hud-sub">
           {snap.playerName} · Day {snap.day} · {clock} · {snap.daysInCity}d here{' '}
           <span className="hud-timer" title="Level timer, counted for the ranking">
@@ -134,6 +135,9 @@ export function HUD({ snap }: { snap: Snapshot }) {
 
         {snap.guardsAlerted > 0 && (
           <div className="alert-badge">🚨 CHASED BY {snap.chasedBy.toUpperCase()}!</div>
+        )}
+        {snap.shotsAtYou > 0 && (
+          <div className="alert-badge under-fire">🔫 UNDER FIRE, BREAK LINE OF SIGHT!</div>
         )}
         {snap.nearSafehouse && !snap.hasPass && <div className="safe-badge">🛏 Safe to sleep (T)</div>}
       </div>

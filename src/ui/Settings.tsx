@@ -10,6 +10,8 @@ interface SettingsProps {
   onRename: (name: string) => void
   /** switch avatar skin */
   onChangeSkin: (skin: string) => void
+  /** reopen the first time tour, for a player who wants it again */
+  onReplayTutorial: () => void
   onReset: () => void
   onBack: () => void
 }
@@ -22,7 +24,15 @@ interface SettingsProps {
  * The name needs an explicit Save so a half typed word never lands in the save,
  * which is also what keeps the integrity fingerprint stable.
  */
-export function Settings({ profile, storageOk, onRename, onChangeSkin, onReset, onBack }: SettingsProps) {
+export function Settings({
+  profile,
+  storageOk,
+  onRename,
+  onChangeSkin,
+  onReplayTutorial,
+  onReset,
+  onBack,
+}: SettingsProps) {
   const [name, setName] = useState(profile.name)
   const [confirmReset, setConfirmReset] = useState(false)
   const skinDef = SKINS.find((s) => s.id === profile.skin) ?? SKINS[0]
@@ -68,6 +78,15 @@ export function Settings({ profile, storageOk, onRename, onChangeSkin, onReset, 
           <h2>Character</h2>
           <SkinPicker value={profile.skin} onChange={onChangeSkin} />
           <p className="hint skin-blurb">{skinDef.blurb}</p>
+
+          <h2>How to play</h2>
+          <p className="hint">
+            Reopen the quick tour that runs before a player's first city. It covers movement, clues, puzzles, the border
+            pass, your three bars and the guards.
+          </p>
+          <button className="ghost" onClick={onReplayTutorial}>
+            Watch the tour again
+          </button>
 
           <div className="danger-row">
             {!confirmReset ? (
