@@ -208,6 +208,8 @@ export class Game {
   private saveAccum = 0
   /** counts down to the next footstep while the runner is on the move */
   private stepTimer = 0
+  /** was a dialog or puzzle panel up last frame, so its opening cue fires once */
+  private boxOpen = false
 
   constructor(city: number, deaths = 0, totalDays = 0, opts: GameOptions = {}) {
     this.world = generateCity(Math.max(1, Math.min(100, Math.round(city))))
@@ -352,6 +354,10 @@ export class Game {
     // flash never sticks to the screen after a death or a puzzle
     if (this.hitFlash > 0) this.hitFlash = Math.max(0, this.hitFlash - dt * 1.6)
     if (this.shotToastCd > 0) this.shotToastCd -= dt
+    // a dialog or puzzle panel is a "box" opening: cue it once on the rising edge
+    const box = this.dialog !== null || this.activePuzzle !== null
+    if (box && !this.boxOpen) sfx.play('open')
+    this.boxOpen = box
     const playing =
       this.status === 'playing' || this.status === 'caught' || this.status === 'cityCleared' || this.status === 'collapsed'
     if (!playing) {

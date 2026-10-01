@@ -603,6 +603,42 @@ function cityTypeTests(s: Suite): void {
     reloaded?.tutorialSeen === true && reloaded.tamperRecovered !== true,
     reloaded ? `seen ${reloaded.tutorialSeen}, tamper ${reloaded.tamperRecovered === true}` : 'no profile',
   )
+
+  // a save written before the tour existed is assumed seen once it has been
+  // played, and only a genuinely clean account is handed the tour
+  const vet = {
+    version: 1,
+    name: 'Vet',
+    skin: 'dlicom',
+    createdAt: 1,
+    updatedAt: 1,
+    bestCity: 12,
+    run: null,
+    stats: { attempts: 5, solves: 3, deaths: 1, citiesCleared: 11, timePlayedSec: 120 },
+    settings: { sound: true },
+    lore: {},
+    onboarded: true,
+  }
+  writeRaw(PROFILE_KEY, JSON.stringify(vet))
+  s.check(
+    'an old played save skips the first time tour',
+    loadProfile()?.tutorialSeen === true,
+    `seen ${loadProfile()?.tutorialSeen}`,
+  )
+  writeRaw(
+    PROFILE_KEY,
+    JSON.stringify({
+      ...vet,
+      name: 'New',
+      bestCity: 1,
+      stats: { attempts: 0, solves: 0, deaths: 0, citiesCleared: 0, timePlayedSec: 0 },
+    }),
+  )
+  s.check(
+    'a brand new save still gets the first time tour',
+    loadProfile()?.tutorialSeen === false,
+    `seen ${loadProfile()?.tutorialSeen}`,
+  )
 }
 
 /* ------------------------------------------------------------------ */
@@ -1217,6 +1253,7 @@ function recordsTests(s: Suite): void {
  */
 function soundTests(s: Suite): void {
   const wasEnabled = sfx.isEnabled()
+  const wasAmbient = sfx.isAmbient()
   sfx.setEnabled(true)
   sfx.resetFired()
 
@@ -1297,7 +1334,41 @@ function soundTests(s: Suite): void {
     return sfx.isEnabled() === false
   })())
 
+  // the UI cues
+  sfx.setEnabled(true)
+  sfx.resetFired()
+  if (typeof document !== 'undefined') {
+    const btn = document.createElement('button')
+    document.body.appendChild(btn)
+    btn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    btn.remove()
+    s.check('clicking a button plays the click cue', sfx.getLast() === 'click', `last ${sfx.getLast()}`)
+  } else {
+    s.check('clicking a button plays the click cue', false, 'no document to click in')
+  }
+
+  const gOpen = new Game(6, 0, 0, { profile: freshProfile('Opener') })
+  gOpen.world.guards.length = 0
+  sfx.resetFired()
+  gOpen.grantClue(0)
+  gOpen.tick(1 / 60)
+  s.check('opening a dialog or puzzle panel plays the open cue', sfx.getLast() === 'open', `last ${sfx.getLast()}`)
+
+  s.check(
+    'the background bed can be started and stopped',
+    (() => {
+      sfx.startAmbient()
+      const on = sfx.isAmbient()
+      sfx.stopAmbient()
+      return on && !sfx.isAmbient()
+    })(),
+  )
+
+  // put the live singleton back exactly as it was found, so running the suite
+  // from a paused game cannot mute it or leave the background bed torn down
   sfx.setEnabled(wasEnabled)
+  if (wasAmbient) sfx.startAmbient()
+  else sfx.stopAmbient()
 }
 
 /* ------------------------------------------------------------------ */

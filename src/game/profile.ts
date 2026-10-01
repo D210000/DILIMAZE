@@ -272,6 +272,15 @@ function sanitize(raw: unknown): Profile | null {
   const runRaw = d.run
   const run = runRaw && typeof runRaw === 'object' ? (runRaw as Record<string, unknown>) : null
   const lore = cleanLore(d.lore)
+  // The first time tour is for genuinely new runners. Saves written before the
+  // tour existed carry no flag at all, so an account that has already been
+  // played is treated as having seen it rather than dropping a tutorial on a
+  // veteran the next time they press Play. A clean account keeps the tour.
+  const played =
+    clampNum(d.bestCity, 1, 100, 1) > 1 ||
+    clampNum(stats.attempts, 0, 1e7, 0) > 0 ||
+    clampNum(stats.citiesCleared, 0, 1e7, 0) > 0
+  const tutorialSeen = typeof d.tutorialSeen === 'boolean' ? d.tutorialSeen : played
 
   const p: Profile = normalize({
     version: PROFILE_VERSION,
@@ -304,7 +313,7 @@ function sanitize(raw: unknown): Profile | null {
     settings: { sound: settings.sound !== false },
     lore,
     onboarded: d.onboarded === true,
-    tutorialSeen: d.tutorialSeen === true,
+    tutorialSeen,
   })
 
   // integrity: the one and only destructive path. A present, current-generation

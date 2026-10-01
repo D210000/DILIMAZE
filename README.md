@@ -43,7 +43,8 @@ Find clues, solve puzzles, eat, drink, sleep... and stay out of the guard's sigh
 - **The first time tour.** Pressing Play for the first time opens a six step tutorial over the menu
   that covers movement, the clue trail, the puzzles, the border pass, the carried bars and the
   guards. It can be skipped, and replayed any time from **Settings → Watch the tour again** or from
-  the manual.
+  the manual. Only genuinely new runners see it: an account that already holds progress, or one
+  written before the tour existed, skips it outright.
 - Collect **$DLI** tokens scattered around the streets: walk over one and it is **pocketed on
   contact**, with no keypress and no prompt (they disappear once picked up).
 - **Opening help only**: at City 1–5 the first **two** clues of a chain are also pointed at with a
@@ -175,7 +176,7 @@ the browser console, or from the preview tooling:
 await window.__dilimaze.runSelfTest()
 ```
 
-117 checks, ~3s, all wired to the real modules (no mocks). It covers:
+122 checks, ~3s, all wired to the real modules (no mocks). It covers:
 
 - **Generation** — all 100 cities: map size matches the curve and grows monotonically, clue count
   matches the ramp, every clue points at a real unique landmark, every riddle/hint is present,
@@ -197,7 +198,9 @@ await window.__dilimaze.runSelfTest()
   city still opens on a fresh Day 1 morning clock.
 - **Sound cues** — the engine asks for the right cue at the right moment: eating, drinking and
   pocketing $DLI each fire their own, walking plays footsteps while standing still stays silent,
-  a guard locking on raises the spotted alarm, and muting silences every cue.
+  a guard locking on wails the siren, a button click and a panel opening each have their own cue,
+  the background bed starts and stops with a run, and muting silences every cue. Also asserts an old
+  played save skips the first time tour while a clean one still gets it.
 - **Solvability** — a flood fill from the spawn reaches every clue and the gate in all 100 cities.
   Generation also reserves the spawn and gate tiles, refuses to let clutter seal a pocket, and
   runs a repair pass, so `solvabilityFixes` should stay 0.
@@ -327,10 +330,12 @@ src/
 - **Skins** — `SKINS` holds four variants (Dlicom, Neon, Ghost, Sunset). They share the one PNG
   and are recolored at load with a canvas `color` blend (`tint`), so adding a variant is one
   entry. The canvas-drawn mascot is still in `character.ts` as the fallback if the PNG can't load.
-- **Sound** — `src/game/sound.ts` is a tiny synthesized cue kit: footsteps (walk and run), a guard
-  spotting you, gunfire, a $DLI chime, and eating / drinking / sleeping. No audio files ship: each
-  cue is built at runtime from oscillators and one shared noise buffer, so the bundle barely moves.
-  The AudioContext is created and resumed only from a real user gesture (pointer, key or touch), and
+- **Sound** — `src/game/sound.ts` is a tiny synthesized cue kit plus a looping background bed:
+  footsteps (walk and run), a wailing siren when a guard spots you, gunfire, a $DLI chime, eating /
+  drinking / sleeping, a UI tap for any button, and a scrape for a panel opening. A slow low drone
+  breathes under a run and fades out when you return to the menu. No audio files ship: every sound is
+  built at runtime from oscillators and one shared noise buffer, so the bundle barely moves. The
+  AudioContext is created and resumed only from a real user gesture (pointer, key or touch), and
   `settings.sound` gates the whole subsystem, so a muted player never builds one.
 
 ## Run locally

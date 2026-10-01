@@ -4,6 +4,7 @@ import { Game } from './game/engine'
 import { freshProfile, loadProfile, resetProfile, saveProfile, storageAvailable, type Profile } from './game/profile'
 import { clearRecords } from './game/records'
 import { render } from './game/render'
+import { sfx } from './game/sound'
 import { HowToPlay } from './ui/HowToPlay'
 import { HUD } from './ui/HUD'
 import { MainMenu } from './ui/MainMenu'
@@ -171,6 +172,8 @@ export default function App() {
       // grant clues or edit the run — see the audit notes in the README.
       if (import.meta.env.DEV) (window as unknown as { game?: Game }).game = g
       gameRef.current = g
+      // the low background bed runs for as long as a run is open
+      sfx.startAmbient()
       g.start()
       unsubscribe.current = g.subscribe(() => setTick((t) => t + 1))
       setTick((t) => t + 1)
@@ -222,6 +225,7 @@ export default function App() {
 
   const backToMenu = useCallback(() => {
     gameRef.current?.saveNow()
+    sfx.stopAmbient()
     unsubscribe.current?.()
     unsubscribe.current = null
     gameRef.current = null
@@ -263,11 +267,13 @@ export default function App() {
             p.onboarded = true
             p.run = null
             if (existing) {
-              // keep the career, just rename / reskin
+              // keep the career, just rename / reskin (including whether this
+              // runner has already been through the first time tour)
               p.bestCity = existing.bestCity
               p.stats = existing.stats
               p.lore = existing.lore
               p.createdAt = existing.createdAt
+              p.tutorialSeen = existing.tutorialSeen === true
             }
             profileRef.current = p
             persist({})

@@ -2,11 +2,12 @@
  * Synthesized sound engine.
  *
  * There are no audio files anywhere in the project: every cue below is built at
- * runtime from oscillators plus one shared noise buffer, so nothing has to be
- * fetched or decoded and the bundle stays as small as it was.
+ * runtime from oscillators plus one shared noise buffer, and the background bed
+ * is a small drone of detuned voices. Nothing has to be fetched or decoded, so
+ * the bundle stays as small as it was.
  *
  * Autoplay policy: browsers refuse to start an AudioContext until the page has
- * been touched. A listener armed at module load drives `unlock()`, which is the
+ * been touched. Listeners armed at module load drive `unlock()`, which is the
  * only place a context is ever created or resumed, and it always runs from a
  * real gesture (pointer, key or touch). Until then `play()` counts the cue and
  * returns, so nothing is scheduled silently.
@@ -16,7 +17,20 @@
  */
 
 /** every cue the game can ask for; a union so a typo cannot ship unnoticed */
-export type Cue = 'step' | 'stepRun' | 'spotted' | 'gunshot' | 'coin' | 'eat' | 'drink' | 'sleep'
+export type Cue =
+  | 'step'
+  | 'stepRun'
+  | 'spotted'
+  | 'gunshot'
+  | 'coin'
+  | 'eat'
+  | 'drink'
+  | 'sleep'
+  | 'click'
+  | 'open'
+
+/** how loud the background bed sits under everything else */
+const AMBIENT_LEVEL = 0.07
 
 interface ToneOptions {
   freq: number
@@ -38,6 +52,12 @@ interface BurstOptions {
   type?: BiquadFilterType
 }
 
+interface AmbientBed {
+  oscs: OscillatorNode[]
+  lfo: OscillatorNode
+  gain: GainNode
+}
+
 class Sfx {
   private enabled = true
   /** set the first time the page is touched; gates all WebAudio work */
@@ -48,6 +68,10 @@ class Sfx {
   /** cues requested since the last reset (dev telemetry, works without audio) */
   private fired = 0
   private last: Cue | null = null
+  /** the looping background pad, when one is playing */
+  private ambient: AmbientBed | null = null
+  /** the player asked for background sound (it may still be waiting on a gesture) */
+  private ambientDesired = false
 
   constructor() {
     if (typeof window === 'undefined') return
@@ -55,11 +79,19 @@ class Sfx {
     window.addEventListener('pointerdown', unlock, { passive: true })
     window.addEventListener('keydown', unlock)
     window.addEventListener('touchstart', unlock, { passive: true })
+    if (typeof document !== 'undefined') {
+      // capture phase, so any button anywhere gets the click before its own
+      // handler runs and can stop propagation
+      document.addEventListener('click', (e) => this.buttonCue(e), true)
+    }
   }
 
   /** honour `settings.sound`; off means no context is ever built */
   setEnabled(on: boolean) {
+    if (this.enabled === on) return
     this.enabled = on
+    if (!on) this.teardownAmbient()
+    else if (this.ambientDesired) this.buildAmbient()
   }
 
   isEnabled() {
@@ -81,12 +113,38 @@ class Sfx {
     this.last = null
   }
 
+  /** true once the player has asked for a background bed (whether or not it plays yet) */
+  isAmbient() {
+    return this.ambientDesired
+  }
+
+  /** true while the background bed is actually making noise */
+  isAmbientPlaying() {
+    return this.ambient !== null
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* lifecycle                                                        */
+  /* ---------------------------------------------------------------- */
+
   /** create and resume the context. Only ever called from a user gesture. */
   unlock() {
     if (!this.enabled) return
     this.armed = true
     const ctx = this.ensure()
     if (ctx && ctx.state === 'suspended') void ctx.resume()
+    if (this.ambientDesired) this.buildAmbient()
+  }
+
+  /** start the looping background bed (idempotent; waits for a gesture if needed) */
+  startAmbient() {
+    this.ambientDesired = true
+    this.buildAmbient()
+  }
+
+  stopAmbient() {
+    this.ambientDesired = false
+    this.teardownAmbient()
   }
 
   play(cue: Cue) {
@@ -105,7 +163,7 @@ class Sfx {
         this.step(true)
         break
       case 'spotted':
-        this.spotted()
+        this.siren()
         break
       case 'gunshot':
         this.gunshot()
@@ -122,7 +180,26 @@ class Sfx {
       case 'sleep':
         this.sleep()
         break
+      case 'click':
+        this.click()
+        break
+      case 'open':
+        this.open()
+        break
     }
+  }
+
+  /** a UI button anywhere on the page: menu, HUD, touch pad, dialogs */
+  private buttonCue(e: Event) {
+    const t = e.target
+    if (!(t instanceof Element)) return
+    const el = t.closest('button, [role="button"], input[type="button"], input[type="submit"]')
+    if (!el || (el instanceof HTMLButtonElement && el.disabled)) return
+    // a real click carries user activation, so the very first one can also arm
+    // the context and still be heard; a synthetic event cannot
+    const ua = (navigator as unknown as { userActivation?: { isActive?: boolean } }).userActivation
+    if (ua?.isActive) this.unlock()
+    this.play('click')
   }
 
   /* ---------------------------------------------------------------- */
@@ -204,20 +281,118 @@ class Sfx {
   }
 
   /* ---------------------------------------------------------------- */
+  /* background bed                                                   */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * A slow low drone: three detuned voices through a lowpass, gently breathing
+   * under a sub-audible amplitude LFO. It fades in over a few seconds and out
+   * again on teardown so entering and leaving a run never clicks.
+   */
+  private buildAmbient() {
+    if (!this.enabled || !this.armed || this.ambient) return
+    const ctx = this.ensure()
+    if (!ctx || !this.master) return
+    const t = ctx.currentTime
+    const g = ctx.createGain()
+    g.gain.setValueAtTime(0.0001, t)
+    g.gain.linearRampToValueAtTime(AMBIENT_LEVEL, t + 3)
+    const filt = ctx.createBiquadFilter()
+    filt.type = 'lowpass'
+    filt.frequency.value = 460
+    filt.Q.value = 0.7
+    const voices: Array<[number, OscillatorType, number]> = [
+      [55, 'sawtooth', -7],
+      [82.41, 'triangle', 5],
+      [110, 'triangle', -4],
+    ]
+    const oscs: OscillatorNode[] = []
+    for (const [freq, type, detune] of voices) {
+      const o = ctx.createOscillator()
+      o.type = type
+      o.frequency.value = freq
+      o.detune.value = detune
+      o.connect(filt)
+      o.start(t)
+      oscs.push(o)
+    }
+    const lfo = ctx.createOscillator()
+    lfo.frequency.value = 0.06
+    const lfoGain = ctx.createGain()
+    lfoGain.gain.value = AMBIENT_LEVEL * 0.4
+    lfo.connect(lfoGain).connect(g.gain)
+    lfo.start(t)
+    filt.connect(g).connect(this.master)
+    this.ambient = { oscs, lfo, gain: g }
+  }
+
+  private teardownAmbient() {
+    const bed = this.ambient
+    if (!bed) return
+    this.ambient = null
+    const ctx = this.ctx
+    if (!ctx) return
+    const t = ctx.currentTime
+    try {
+      bed.gain.gain.cancelScheduledValues(t)
+      bed.gain.gain.setValueAtTime(Math.max(0.0001, bed.gain.gain.value), t)
+      bed.gain.gain.linearRampToValueAtTime(0.0001, t + 0.8)
+    } catch {
+      /* ignore: the bed is being thrown away either way */
+    }
+    const stopAt = t + 0.9
+    for (const o of bed.oscs) {
+      try {
+        o.stop(stopAt)
+      } catch {
+        /* already stopped */
+      }
+    }
+    try {
+      bed.lfo.stop(stopAt)
+    } catch {
+      /* already stopped */
+    }
+  }
+
+  /* ---------------------------------------------------------------- */
   /* cues                                                            */
   /* ---------------------------------------------------------------- */
 
   /** a soft pavement tap; running lands it harder and a touch brighter */
   private step(run: boolean) {
-    const g = run ? 0.15 : 0.09
+    const g = run ? 0.2 : 0.13
     this.burst({ dur: run ? 0.06 : 0.05, gain: g, freq: run ? 520 : 380, q: 0.8 })
-    this.tone({ freq: run ? 120 : 95, dur: 0.07, type: 'sine', gain: g * 0.7, slideTo: 58 })
+    this.tone({ freq: run ? 120 : 95, dur: 0.07, type: 'sine', gain: g * 0.75, slideTo: 58 })
   }
 
-  /** two rising notes: somebody just locked on to you */
-  private spotted() {
-    this.tone({ freq: 740, dur: 0.11, type: 'square', gain: 0.11 })
-    this.tone({ freq: 1180, dur: 0.18, type: 'square', gain: 0.11, at: 0.1 })
+  /** a wailing two-tone alarm: somebody just locked on to you */
+  private siren() {
+    const ctx = this.ctx
+    const master = this.master
+    if (!ctx || !master) return
+    const t0 = ctx.currentTime
+    const g = ctx.createGain()
+    g.gain.setValueAtTime(0.0001, t0)
+    g.gain.exponentialRampToValueAtTime(0.14, t0 + 0.06)
+    g.gain.setValueAtTime(0.14, t0 + 0.8)
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 1.0)
+    const filt = ctx.createBiquadFilter()
+    filt.type = 'lowpass'
+    filt.frequency.value = 1600
+    filt.Q.value = 0.6
+    const osc = ctx.createOscillator()
+    osc.type = 'sawtooth'
+    const f = osc.frequency
+    f.setValueAtTime(540, t0)
+    for (let i = 0; i < 2; i++) {
+      const a = t0 + i * 0.42
+      f.linearRampToValueAtTime(980, a + 0.21)
+      f.linearRampToValueAtTime(540, a + 0.42)
+    }
+    osc.connect(filt).connect(g).connect(master)
+    osc.start(t0)
+    osc.stop(t0 + 1.05)
   }
 
   /** crack, hiss and a low thump */
@@ -250,6 +425,18 @@ class Sfx {
   private sleep() {
     this.tone({ freq: 440, dur: 0.7, type: 'sine', gain: 0.15, slideTo: 180 })
     this.burst({ dur: 0.6, gain: 0.05, freq: 500, q: 0.6, type: 'lowpass', at: 0.15 })
+  }
+
+  /** a crisp UI tap */
+  private click() {
+    this.burst({ dur: 0.02, gain: 0.11, freq: 2600, type: 'highpass', q: 0.5 })
+    this.tone({ freq: 1040, dur: 0.03, type: 'square', gain: 0.05 })
+  }
+
+  /** a panel swinging open: a wooden scrape into a soft latch */
+  private open() {
+    this.burst({ dur: 0.12, gain: 0.13, freq: 420, q: 1.4, type: 'bandpass' })
+    this.tone({ freq: 240, dur: 0.18, type: 'sine', gain: 0.1, slideTo: 120 })
   }
 }
 
