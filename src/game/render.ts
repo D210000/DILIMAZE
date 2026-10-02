@@ -3,6 +3,7 @@ import { drawCharacter } from './character'
 import { BRAND } from './brand'
 import { dayLight, type Game } from './engine'
 import type { Guard, Prop, Region, TileKind, World } from './types'
+import { render3D } from './render3d'
 
 /**
  * Dlicom world renderer.
@@ -22,6 +23,13 @@ const DISPLAY = '"Youre Gone", ui-monospace, monospace'
 const WALL_STEPS = [13, 17, 21] as const
 
 export function render(ctx: CanvasRenderingContext2D, game: Game, viewW: number, viewH: number) {
+  // the eye level street camera is a completely different projection, so it has
+  // its own renderer; the map view below is the original pipeline, untouched
+  if (game.cameraMode === 'walk') {
+    render3D(ctx, game, viewW, viewH)
+    return
+  }
+
   const world = game.world
   const p = game.player
   const r = world.region
@@ -541,7 +549,7 @@ function drawGate(ctx: CanvasRenderingContext2D, world: World, game: Game) {
   }
 }
 
-function drawProp(ctx: CanvasRenderingContext2D, pr: Prop, world: World) {
+export function drawProp(ctx: CanvasRenderingContext2D, pr: Prop, world: World) {
   const x = pr.x
   const y = pr.y
   const r = world.region
@@ -778,7 +786,7 @@ function drawProp(ctx: CanvasRenderingContext2D, pr: Prop, world: World) {
  */
 const SPENT_PROPS = new Set(['board', 'bar', 'kid', 'radio', 'graffiti'])
 
-interface PropMarks {
+export interface PropMarks {
   solved: boolean
   isNext: boolean
   /** opening cities + first two clues only */
@@ -787,7 +795,7 @@ interface PropMarks {
 }
 
 /** stamps on top of a prop: clue rings, "already done" check marks, empty state */
-function drawPropBadges(ctx: CanvasRenderingContext2D, pr: Prop, m: PropMarks) {
+export function drawPropBadges(ctx: CanvasRenderingContext2D, pr: Prop, m: PropMarks) {
   if (m.hasPass && !m.solved) return
 
   if (m.solved) {
@@ -1024,7 +1032,7 @@ const GUARD_ART: GuardArt[] = [
  * ticks, all sized and coloured by tier, so a Borderlands enforcer is visibly
  * heavier than a Fringe patrol before it ever sees you. Captains add gold.
  */
-function drawGuard(ctx: CanvasRenderingContext2D, gd: Guard, r: Region) {
+export function drawGuard(ctx: CanvasRenderingContext2D, gd: Guard, r: Region) {
   const chasing = gd.state === 'chase'
   const uneasy = !chasing && gd.alert > 0.4
   const art = GUARD_ART[Math.max(0, Math.min(GUARD_ART.length - 1, gd.tier))]
@@ -1291,7 +1299,7 @@ function drawSteps(
 }
 
 /** deterministic 0..1 noise per tile, so the detail never flickers between frames */
-function tileHash(x: number, y: number): number {
+export function tileHash(x: number, y: number): number {
   let h = Math.imul(x + 0x9e37, 0x85ebca6b) ^ Math.imul(y + 0x51ed, 0xc2b2ae35)
   h ^= h >>> 15
   h = Math.imul(h, 0x2545f491)
@@ -1311,22 +1319,22 @@ function ring(ctx: CanvasRenderingContext2D, x: number, y: number, radius: numbe
   ctx.restore()
 }
 
-function withAlpha(hex: string, a: number): string {
+export function withAlpha(hex: string, a: number): string {
   const n = parseInt(hex.slice(1), 16)
   return `rgba(${(n >> 16) & 0xff}, ${(n >> 8) & 0xff}, ${n & 0xff}, ${a})`
 }
 
-function lighten(hex: string, amt: number): string {
+export function lighten(hex: string, amt: number): string {
   return shift(hex, amt)
 }
 
 /** the shadowed side of a surface: the same hue, darker */
-function shade(hex: string, amt: number): string {
+export function shade(hex: string, amt: number): string {
   return shift(hex, -amt)
 }
 
 /** pull a colour toward grey, so pavements read as stone and not as road */
-function desaturate(hex: string, amount: number): string {
+export function desaturate(hex: string, amount: number): string {
   const n = parseInt(hex.slice(1), 16)
   const r = (n >> 16) & 0xff
   const g = (n >> 8) & 0xff

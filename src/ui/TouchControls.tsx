@@ -1,14 +1,27 @@
-import { useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import type { Game, Snapshot } from '../game/engine'
 
+/**
+ * The mobile stick. Touches are read raw, but the vector the game sees is eased
+ * toward the newest touch every frame: phones deliver pointer moves in coarse
+ * bursts, so feeding them straight through made the runner stutter. A small dead
+ * zone around the centre stops a resting thumb from drifting, and pushing the
+ * stick past the run ring makes the runner sprint.
+ */
 export function TouchControls({ game, snap }: { game: Game; snap: Snapshot }) {
   const knobRef = useRef<HTMLDivElement>(null)
   const padRef = useRef<HTMLDivElement>(null)
   const activeRef = useRef(false)
+  /** where the thumb is pointing, 0..1 in each axis (clamped to the unit disc) */
+  const targetRef = useRef({ x: 0, y: 0 })
+  /** what the game is actually being fed, eased toward the target each frame */
+  const curRef = useRef({ x: 0, y: 0 })
+  const rafRef = useRef(0)
+  const lastRef = useRef(0)
 
-  const handleMove = (clientX: number, clientY: number) => {
+  const readTarget = (clientX: number, clientY: number) => {
     const pad = padRef.current
-    if (!pad || !activeRef.current) return
+    if (!pad) return
     const rect = pad.getBoundingClientRect()
     const cx = rect.left + rect.width / 2
     const cy = rect.top + rect.height / 2
@@ -20,31 +33,85 @@ export function TouchControls({ game, snap }: { game: Game; snap: Snapshot }) {
       dx /= len
       dy /= len
     }
-    game.setTouchAxis(dx, dy)
-    // pushing the stick near its edge = run
-    game.setTouchRun(len > 0.85)
+    targetRef.current = { x: dx, y: dy }
+  }
+
+  const frame = (now: number) => {
+    const dt = lastRef.current ? Math.min(0.05, (now - lastRef.current) / 1000) : 0.016
+    lastRef.current = now
+    const cur = curRef.current
+    const target = activeRef.current ? targetRef.current : { x: 0, y: 0 }
+    // exponential ease: fast enough to feel connected, slow enough to soften
+    // the jumps between coarse pointer events
+    const k = Math.min(1, dt * 18)
+    cur.x += (target.x - cur.x) * k
+    cur.y += (target.y - cur.y) * k
+    if (!activeRef.current && Math.hypot(cur.x, cur.y) < 0.01) {
+      cur.x = 0
+      cur.y = 0
+    }
+
+    // dead zone, then a gentle response curve so small pushes walk, not sprint
+    const len = Math.hypot(cur.x, cur.y)
+    let outX = 0
+    let outY = 0
+    if (len > 0.14) {
+      const mag = Math.min(1, (len - 0.14) / 0.86)
+      outX = (cur.x / len) * mag
+      outY = (cur.y / len) * mag
+    }
+    game.setTouchAxis(outX, outY)
+    game.setTouchRun(Math.hypot(outX, outY) > 0.82)
+
     if (knobRef.current) {
-      knobRef.current.style.transform = `translate(${dx * (radius - 20)}px, ${dy * (radius - 20)}px)`
+      const rect = padRef.current?.getBoundingClientRect()
+      const radius = rect ? rect.width / 2 : 60
+      knobRef.current.style.transform = `translate(${cur.x * (radius - 22)}px, ${cur.y * (radius - 22)}px)`
+    }
+
+    if (activeRef.current || Math.hypot(cur.x, cur.y) > 0.001) {
+      rafRef.current = requestAnimationFrame(frame)
+    } else {
+      rafRef.current = 0
+      lastRef.current = 0
+    }
+  }
+
+  const startLoop = () => {
+    if (!rafRef.current) {
+      lastRef.current = 0
+      rafRef.current = requestAnimationFrame(frame)
     }
   }
 
   const start = (e: React.PointerEvent) => {
     activeRef.current = true
     ;(e.target as HTMLElement).setPointerCapture?.(e.pointerId)
-    handleMove(e.clientX, e.clientY)
+    readTarget(e.clientX, e.clientY)
+    startLoop()
   }
 
   const move = (e: React.PointerEvent) => {
-    if (activeRef.current) e.preventDefault()
-    handleMove(e.clientX, e.clientY)
+    if (!activeRef.current) return
+    e.preventDefault()
+    readTarget(e.clientX, e.clientY)
+    startLoop()
   }
 
   const reset = () => {
     activeRef.current = false
-    game.setTouchAxis(0, 0)
-    game.setTouchRun(false)
-    if (knobRef.current) knobRef.current.style.transform = 'translate(0,0)'
+    targetRef.current = { x: 0, y: 0 }
+    startLoop()
   }
+
+  useEffect(() => {
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current)
+      rafRef.current = 0
+      game.setTouchAxis(0, 0)
+      game.setTouchRun(false)
+    }
+  }, [game])
 
   const playing = snap.status === 'playing'
 

@@ -28,7 +28,8 @@ Find clues, solve puzzles, eat, drink, sleep... and stay out of the guard's sigh
 - **Puzzles never hard-block you.** From City 4 the clues carry word / code / symbol-sequence
   locks. Miss three times and the panel starts coaching you; miss five and it tells you the
   answer. A quiz can slow a run down, not end it.
-- Watch your **hunger and thirst**: drink free at fountains, buy food at shops with **$DLI**.
+- Watch your **hunger and thirst**: drink free at fountains (each one stands beside a block or
+  under a tree, never jammed against a shop door), buy food at shops with **$DLI**.
   Collapsing restarts the city from Day 1.
 - **Your bars cross the border with you.** Food, water and health are not topped up when you reach
   the next city: the new level opens on a fresh morning clock, but the three bars carry on exactly
@@ -37,7 +38,7 @@ Find clues, solve puzzles, eat, drink, sleep... and stay out of the guard's sigh
   **Timber Village** (low cottages, fences, dirt lanes, a lot of open ground), **Forest Clearings**
   (mostly trees, very few walls), a **Future City** (tall glass towers, wide plazas) and a **Rubble
   District** (half emptied streets, dumped crates). The type drives how much of the map is built
-  over, how tall the blocks stand and how many trees grow between them, and the palette moves with
+  over, how tall the blocks stand and how thickly the footpaths are lined with trees, and the palette moves with
   it — plus a per city hue drift, so neighbouring cities never look alike. The type is also named
   on the HUD, because a forest has very little cover and a future city towers over you.
 - **The first time tour.** Pressing Play for the first time opens a six step tutorial over the menu
@@ -110,6 +111,38 @@ fountains, crates, fences, dumpsters, stalls, water towers and the clue landmark
 (shops, bars, houses, boards, radios, graffiti, kids) are all boxes with a top face and a front
 face rather than icons.
 
+**Two cameras.** The map view above is the default, and you can pick either from the main menu, from
+Settings, or live with the chip in the game corner; the choice is remembered on the profile.
+
+**The street camera** drops to eye level for a walk through the city. A chase rig several strides
+behind the runner builds a simple camera basis and one `project` call, the ground recedes to a
+horizon, and every block stands up as a real box with a **window grid** on every visible face, a lit
+roof and a parapet. Blocks are three to four times the map height here, so the street has a skyline.
+Trees and bushes are drawn as proper billboards, a tapered trunk under stacked shaded canopy, not
+flat circles. A **ring wall** runs right round the map so the city has a real border instead of an
+open edge, and the whole scene is lit from one place: a **sky with a sun and a moon** that track the
+day arc, a blue morning and afternoon sky that turns orange only at dawn and dusk and to a starred
+night after dark, and every surface (ground, walls, roofs, guards) tinted by the current light. That
+light comes from the same `dayLight` curve the map view paints from, so the two cameras can never
+disagree about the hour: a day opens bright under a blue sky and the orange is saved for a low sun. The avatar is the **same mascot**
+as the map view, just drawn **from behind (no face) while heading away** and from the front only
+when running back at the camera.
+Controls are camera relative here: **W heads into the screen and A / D step sideways**, so the same
+keys that walk the map do the obvious thing on foot (the map view still walks the world axes).
+Looking around is a setting, with three choices on the profile (change it any time in Settings):
+**right button drag** is the default, where the view turns by how far the pointer moves while the
+right button is held and stops the moment it is released, so a plain hover, or a cursor left parked
+by an edge, never takes the camera with it (the browser menu is suppressed on the canvas while the
+street camera is up); **free look** takes the cursor with pointer lock on a click and then follows
+every mouse move with no button at all, with Escape handing the pointer back; and **mouse off**
+leaves the view to touch and the keyboard. A finger drags to look whatever the setting says, since
+a phone has no right button, and the stick lives on its own element so a moving thumb and a looking
+finger work at once.
+Crossing into a new city resets the camera to the entry heading, so a fresh city always opens
+looking down the road into town instead of at the border wall. The whole map is drawn every frame,
+corner to corner, so walking in never reveals a missing edge. Everything reuses the existing prop,
+guard and avatar art, scaled by depth. No engine, no assets.
+
 **Streets read as streets.** The road is asphalt with a sheen band, worn **gutters** and a painted
 **edge line** where it meets the kerb, a **dashed centre line** down the middle of each street,
 **zebra crossings** on the tiles either side of every intersection (the bars run with the traffic
@@ -176,12 +209,13 @@ the browser console, or from the preview tooling:
 await window.__dilimaze.runSelfTest()
 ```
 
-126 checks, ~3s, all wired to the real modules (no mocks). It covers:
+152 checks, ~3s, all wired to the real modules (no mocks). It covers:
 
 - **Generation** — all 100 cities: map size matches the curve and grows monotonically, clue count
   matches the ramp, every clue points at a real unique landmark, every riddle/hint is present,
   every puzzle is internally solvable (the scrambled board really is an anagram of the answer),
-  every city has guards *and* somewhere to hide, and generation is deterministic but varied.
+  every city has guards *and* somewhere to hide, every **tree stands on a footpath** (never the
+  roadway, never the open park), and generation is deterministic but varied.
 - **Clue variety** — no riddle repeats inside a city's chain, two neighbouring cities never share a
   riddle, and the locator hints are reworded rather than stamped out (measured: ~398 distinct
   riddles and ~525 distinct locator lines across the 564 clues of a full run).
@@ -193,7 +227,18 @@ await window.__dilimaze.runSelfTest()
   watcher's really is wider than a brawler's, a shooter takes health off the runner at range,
   at most three rounds put you down, and the death is reported as gunfire rather than starvation. Also
   asserts the patrol count never falls and climbs with the city, and that not even the fastest guard
-  can outrun a sprint, even at night.
+  can outrun a sprint, even at night. Also drives the runner hard into a block face and asserts the
+  **border holds** for the whole footprint, so the sprite can never slide its shoulders through a
+  wall.
+- **Camera** — a run opens on the map view, switching to the street camera takes effect on the run
+  and is written to the profile, the choice survives a save and load, the snapshot reports the live
+  setting, and the perspective renderer draws frames without throwing in daylight, dusk and night.
+  The look mode is checked too (the right button drag is the default, the choice is written to the
+  profile and survives a save, and a junk value falls back to the drag), and the look itself is
+  measured: the view holds dead still while no drag is held, a sweep turns it, releasing leaves it
+  where it stopped, and one absurd pointer jump cannot fling it round. A new
+  city is checked to open with the camera facing the way in, the runner standing on a road, and the
+  road ahead open to the gate.
 - **Carried bars** — crossing a border keeps hunger, thirst and health to the point, while the new
   city still opens on a fresh Day 1 morning clock.
 - **Sound cues** — the engine asks for the right cue at the right moment: eating, drinking and
@@ -240,6 +285,7 @@ src/
                   hints, guard ranks + trades, solvability guard
     engine.ts     game loop, player, guards, survival, clues, day arc, level timer, checkpoints
     render.ts     neon canvas world renderer: raised 3D blocks, street design, props
+    render3d.ts   the eye level street camera: a hand rolled perspective projection
     profile.ts    localStorage profile, integrity fingerprint, migration, sanitisation
     records.ts    local ranking board: fastest clear per level + completed full runs
     types.ts      shared types
@@ -254,7 +300,7 @@ src/
   ui/
     Onboarding.tsx  name + avatar picker (with live canvas previews)
     MainMenu.tsx    the hub: Play or Continue, Settings, How to play?, Ranking, world map
-    Settings.tsx    rename the runner, swap the avatar, reset the profile
+    Settings.tsx    rename the runner, swap the avatar, pick the camera, choose how the mouse looks, reset the profile
     HowToPlay.tsx   the in-game manual
     Tutorial.tsx    the first time tutorial (six steps, inline SVG art)
     Ranking.tsx     fastest clear per level + best full runs
@@ -262,7 +308,7 @@ src/
     GlitchText.tsx  scrambled-until-unlocked copy
     HUD.tsx         HUD, foldable clue bar + riddle + locator hint, signal meter, toasts
     Menus.tsx       dialog / puzzle / caught / cleared / victory overlays
-    TouchControls.tsx  joystick + action buttons
+    TouchControls.tsx  smoothed joystick (dead zone + eased vector) + action buttons
   App.tsx  screen flow: onboarding → menu → (settings | how to play | ranking | map | tutorial) → game
   index.css  Dlicom neon theme (mirrors brand.ts colors)
 ```
@@ -278,6 +324,20 @@ src/
 - A 3D read on the whole map: raised building blocks with walls, roofs, parapets and entrance
   stairs, plus a rebuilt road design (kerbs, gutters, lane dashes, zebra crossings, junction
   boxes, manholes)
+- A second camera: flip any time between the raised map view and an eye level street camera that
+  walks the city with you (a hand rolled perspective projection with real depth, chosen from the
+  main menu, Settings or the in run chip, remembered on the profile)
+- A living street view: a blue day sky and a moving sun and moon over it, taller blocks with window
+  grids, real tree billboards, a ring wall round the city, camera relative movement and a back
+  facing avatar that is the same character as the map view
+- A look setting with three modes: right button drag (the default), free look that takes the cursor
+  with pointer lock, or mouse off entirely, all remembered on the profile and kept out of the save
+  fingerprint
+- A right button look that behaves: hold and sweep to turn, release and it stays put, a new city
+  always opens facing down the road into town, and the whole map is drawn every frame so the city
+  reads complete from any corner
+- A mobile stick that reads like a stick: a dead zone, a pushed thumb rings up to a sprint, and the
+  analog vector is eased every frame so coarse touch events never make the runner stutter
 - A clue panel that stays out of the way: one folded bar with the clue count, signal meter and a
   single line of the riddle, which unfolds by itself when a clue lands and folds back after a few
   seconds, with a chevron to pin it either way

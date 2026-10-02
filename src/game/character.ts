@@ -24,6 +24,14 @@ export interface CharacterDrawOptions {
   time?: number
   /** overall size multiplier */
   scale?: number
+  /**
+   * Draw the same mascot from behind: the shipped art is a single front facing
+   * frame, so the face is covered with the suit's own colour (the same trick the
+   * blink uses). Same body, same feet, same claws, no eyes.
+   */
+  back?: boolean
+  /** skip the soft white rim light (used by the street camera) */
+  noRim?: boolean
 }
 
 /** images are cached per URL so we never re-decode every frame */
@@ -185,12 +193,23 @@ function drawFromImage(ctx: CanvasRenderingContext2D, skin: Skin, o: CharacterDr
 
   // rim light: a soft white glow around the silhouette so the hero reads on
   // bright neon pavement just as well as in a dark alley
-  ctx.shadowColor = 'rgba(255, 255, 255, 0.85)'
-  ctx.shadowBlur = 6
+  if (!o.noRim) {
+    ctx.shadowColor = 'rgba(255, 255, 255, 0.85)'
+    ctx.shadowBlur = 6
+  }
 
   // body slab (the feet are drawn separately, on top)
   ctx.drawImage(source, 0, 0, natW, BODY_ROWS, -artW / 2, -artH + dip, artW, BODY_ROWS * k)
   ctx.shadowBlur = 0 // eye glints stay crisp, not haloed
+
+  // seen from behind, the face is covered with the suit's own colour. A rounded
+  // slab over the whole eye band hides the eyes cleanly while leaving the head
+  // silhouette (the art's outline) intact around the edge.
+  if (o.back) {
+    ctx.fillStyle = lidColorFor(skin, source, img)
+    roundRect(ctx, -artW / 2 + 1.5, -artH + dip + 1.5 * k, artW - 3, 20 * k, 6 * k)
+    ctx.fill()
+  }
 
   // --- eyes: roll with the direction of travel and blink now and then -------
   // local +x is always "forward" (the facing flip handles mirroring), so the eyes
@@ -201,7 +220,7 @@ function drawFromImage(ctx: CanvasRenderingContext2D, skin: Skin, o: CharacterDr
   const eyeY = -artH + 11 * k + dip
   const glint = (artX: number) => {
     const ex = -artW / 2 + artX * k
-    if (blinking) {
+    if (o.back || blinking) {
       // eyelid: a slab of the suit's own colour over the eye
       ctx.fillStyle = lidColorFor(skin, source, img)
       ctx.beginPath()
@@ -214,8 +233,10 @@ function drawFromImage(ctx: CanvasRenderingContext2D, skin: Skin, o: CharacterDr
     ctx.arc(ex + lookX * 2.1 * k, eyeY + lookY * 1.5 * k, 1.5 * k * Math.max(0.7, s), 0, Math.PI * 2)
     ctx.fill()
   }
-  glint(19)
-  glint(38.5)
+  if (!o.back) {
+    glint(19)
+    glint(38.5)
+  }
 
   // feet: lift and push alternately, always touching the floor otherwise
   ctx.shadowBlur = 6 // the boots get the same rim so they don't melt into the road
@@ -309,12 +330,13 @@ export function drawCharacter(ctx: CanvasRenderingContext2D, o: CharacterDrawOpt
   drawCape(ctx, skin, capeFlutter, bob)
 
   const legLift = o.pose === 'climb' ? 5 : 0
+  const back = o.back === true
   drawLeg(ctx, skin, -3.4, bob, swing * 3.4 - legLift)
   drawLeg(ctx, skin, 3.4, bob, -swing * 3.4 - legLift)
-  drawBody(ctx, skin, bob)
+  drawBody(ctx, skin, bob, back)
   drawArm(ctx, skin, -1, bob, -swing * 4, o.pose)
   drawArm(ctx, skin, 1, bob, swing * 4, o.pose)
-  drawHelmet(ctx, skin, bob, o.pose, clock)
+  drawHelmet(ctx, skin, bob, o.pose, clock, back)
 
   if (o.pose === 'interact') drawEmote(ctx, clock)
 
@@ -342,7 +364,7 @@ function drawLeg(ctx: CanvasRenderingContext2D, skin: Skin, x: number, bob: numb
   ctx.stroke()
 }
 
-function drawBody(ctx: CanvasRenderingContext2D, skin: Skin, bob: number) {
+function drawBody(ctx: CanvasRenderingContext2D, skin: Skin, bob: number, back = false) {
   const g = ctx.createLinearGradient(-9, -27, 9, -12)
   g.addColorStop(0, skin.suitLight)
   g.addColorStop(0.45, skin.suit)
@@ -360,7 +382,16 @@ function drawBody(ctx: CanvasRenderingContext2D, skin: Skin, bob: number) {
   ctx.ellipse(-4.4, -21 + bob, 2.1, 5.2, -0.2, 0, Math.PI * 2)
   ctx.fill()
 
-  // chest emblem "D"
+  // chest emblem "D" (front only; the back of the suit carries a seam instead)
+  if (back) {
+    ctx.strokeStyle = 'rgba(0,0,0,0.22)'
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.moveTo(0, -25 + bob)
+    ctx.lineTo(0, -12 + bob)
+    ctx.stroke()
+    return
+  }
   ctx.fillStyle = skin.emblem
   ctx.font = 'bold 10px "Segoe UI", system-ui, sans-serif'
   ctx.textAlign = 'center'
@@ -425,7 +456,14 @@ function drawCape(ctx: CanvasRenderingContext2D, skin: Skin, flutter: number, bo
   ctx.fill()
 }
 
-function drawHelmet(ctx: CanvasRenderingContext2D, skin: Skin, bob: number, pose: CharacterPose, clock: number) {
+function drawHelmet(
+  ctx: CanvasRenderingContext2D,
+  skin: Skin,
+  bob: number,
+  pose: CharacterPose,
+  clock: number,
+  back = false,
+) {
   const cy = -33 + bob
   const r = 8.6
 
@@ -441,6 +479,21 @@ function drawHelmet(ctx: CanvasRenderingContext2D, skin: Skin, bob: number, pose
   ctx.strokeStyle = skin.trim
   ctx.lineWidth = 1.5
   ctx.stroke()
+
+  // the rear of the helmet is solid: no face, just a seam and a glint
+  if (back) {
+    ctx.strokeStyle = 'rgba(0,0,0,0.22)'
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.moveTo(0, cy - r + 1)
+    ctx.lineTo(0, cy + r - 1)
+    ctx.stroke()
+    ctx.fillStyle = 'rgba(255,255,255,0.3)'
+    ctx.beginPath()
+    ctx.ellipse(-3.2, cy - 4.6, 2.6, 1.5, -0.6, 0, Math.PI * 2)
+    ctx.fill()
+    return
+  }
 
   // face
   const blink = Math.sin(clock * 0.9) > 0.985 ? 0.25 : 1

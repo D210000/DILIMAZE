@@ -789,6 +789,43 @@ export function generateCity(city: number, opts: { skipSolvabilityGuard?: boolea
       tiles[idx(x, y)] = 'building'
     }
 
+  /* ---- a pond at a crossroads ----------------------------------------
+   * Where a vertical and a horizontal street cross, drop a small square of
+   * water in the middle. The roads are three tiles wide, so the outer lane and
+   * the paving beyond it stay open: a walkable ring remains all round the pond
+   * and the four arms still meet, so the clue flood fill is never cut. Pond
+   * draws come from their own RNG so the map and prop streams are untouched. */
+  const pondRng = new RNG(city * 6151 + 41)
+  const roadAt = (x: number, y: number) => getTile(x, y) === 'road'
+  const spots: Array<{ x: number; y: number }> = []
+  for (const vx of vRoads)
+    for (const hy of hRoads) {
+      if (vx < 5 || hy < 5 || vx > w - 6 || hy > h - 6) continue
+      if (roadAt(vx, hy) && roadAt(vx, hy - 3) && roadAt(vx, hy + 3) && roadAt(vx - 3, hy) && roadAt(vx + 3, hy))
+        spots.push({ x: vx, y: hy })
+    }
+  pondRng.shuffle(spots)
+  const pondCount = spots.length ? (spots.length > 1 && pondRng.chance(0.5) ? 2 : 1) : 0
+  for (let i = 0; i < pondCount; i++) {
+    const s = spots[i]
+    let clear = true
+    for (let dy = -2; dy <= 2 && clear; dy++)
+      for (let dx = -2; dx <= 2 && clear; dx++) {
+        const t = getTile(s.x + dx, s.y + dy)
+        if (t !== 'road' && t !== 'sidewalk' && t !== 'plaza') clear = false
+      }
+    if (!clear) continue
+    for (let dy = -1; dy <= 1; dy++)
+      for (let dx = -1; dx <= 1; dx++) setTile(s.x + dx, s.y + dy, 'water')
+    // stone kerb ring, so the pond reads as a feature against the paving
+    for (let dy = -2; dy <= 2; dy++)
+      for (let dx = -2; dx <= 2; dx++) {
+        if (Math.abs(dx) < 2 && Math.abs(dy) < 2) continue
+        const t = getTile(s.x + dx, s.y + dy)
+        if (t === 'road' || t === 'plaza') setTile(s.x + dx, s.y + dy, 'sidewalk')
+      }
+  }
+
   const props: Prop[] = []
   let propId = 1
   /** 1 = tile already holds a prop (or can't be walked on at all) */
@@ -868,6 +905,52 @@ export function generateCity(city: number, opts: { skipSolvabilityGuard?: boolea
     return ways < 2
   }
 
+  /**
+   * A fountain wants to stand beside a block or under a tree, with a clear ring
+   * around it: not jammed against a wall, not shoulder to shoulder with clutter.
+   */
+  // A fountain is a landmark: it sits beside a block or under a tree, with room
+  // to breathe. A tree is a neighbour rather than clutter, so canopies never
+  // count as crowding and a fountain never crowds a tree.
+  const besideBlock = (x: number, y: number) =>
+    getTile(x - 1, y) === 'building' ||
+    getTile(x + 1, y) === 'building' ||
+    getTile(x, y - 1) === 'building' ||
+    getTile(x, y + 1) === 'building'
+  const treeNear = (x: number, y: number) =>
+    props.some(
+      (p) =>
+        p.kind === 'tree' &&
+        Math.abs(p.x / TS - (x + 0.5)) <= 2.5 &&
+        Math.abs(p.y / TS - (y + 0.5)) <= 2.5,
+    )
+  const fountainCrowded = (x: number, y: number, skip?: number) =>
+    props.some(
+      (p) =>
+        p.id !== skip &&
+        p.kind !== 'tree' &&
+        Math.abs(p.x / TS - (x + 0.5)) <= 1.4 &&
+        Math.abs(p.y / TS - (y + 0.5)) <= 1.4,
+    )
+  const fountainSpotOk = (x: number, y: number) =>
+    (besideBlock(x, y) || treeNear(x, y)) && !fountainCrowded(x, y)
+  // the closest free footpath tile: where a companion tree for a fountain grows
+  const sidewalkNear = (x: number, y: number): { x: number; y: number } | null => {
+    // two tiles is the limit: that is what keeps the companion tree inside the
+    // "beside a block or under a tree" rule the self-test measures
+    for (let r = 1; r <= 2; r++)
+      for (let dy = -r; dy <= r; dy++)
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.abs(dx) < r && Math.abs(dy) < r) continue
+          const nx = x + dx
+          const ny = y + dy
+          if (getTile(nx, ny) !== 'sidewalk') continue
+          if (occupancy[ny * w + nx]) continue
+          return { x: nx, y: ny }
+        }
+    return null
+  }
+
   // scatter decor + interactables on walkable tiles
   for (let y = 1; y < h - 1; y++)
     for (let x = 1; x < w - 1; x++) {
@@ -886,23 +969,27 @@ export function generateCity(city: number, opts: { skipSolvabilityGuard?: boolea
 
       const r = rng.next()
       if (t === 'park') {
-        // green spaces are the cover of a forest city and the trim of a metro
-        const treeP = Math.min(0.85, 0.3 * type.trees)
-        const bushP = treeP + Math.min(0.3, 0.12 * type.trees)
-        if (r < treeP) place('tree')
-        else if (r < bushP) place('bush', { blocking: false, hide: true })
+        // green space is cover and seating — trees belong on the footpaths, so a
+        // park grows shrubs and benches and never a stray trunk in the lawn
+        const bushP = Math.min(0.6, 0.22 * type.trees)
+        if (r < bushP) place('bush', { blocking: false, hide: true })
         else if (r < bushP + 0.08) place('bench', { blocking: false })
         continue
       }
-      if (t === 'plaza' && r < 0.06) {
+      if (t === 'plaza' && r < 0.06 && fountainSpotOk(x, y)) {
         place('fountain')
         continue
       }
       if (t === 'sidewalk' || t === 'road') {
         // what gets left lying in the street is the city type talking
         const w = STREET_BIAS[type.id]
+        // trees line the footpaths and only the footpaths: never the roadway and
+        // never the open park, so a canopy always frames a kerb
+        if (t === 'sidewalk' && r < 0.03 * (w.tree ?? 1)) {
+          place('tree', { blocking: false })
+          continue
+        }
         const table: Array<[PropKind, Partial<Prop> | undefined, number]> = [
-          ['tree', { blocking: false }, 0.025 * (w.tree ?? 1)],
           ['crate', { climbable: true }, 0.02 * (w.crate ?? 1)],
           ['fence', { climbable: true }, 0.015 * (w.fence ?? 1)],
           ['dumpster', { climbable: true, hide: true }, 0.01 * (w.dumpster ?? 1)],
@@ -921,9 +1008,25 @@ export function generateCity(city: number, opts: { skipSolvabilityGuard?: boolea
       }
     }
 
-  // guarantee a fountain
+  // guarantee a fountain, and prefer one that sits well: a plaza tile beside a
+  // block or a tree, with room around it, as close to the middle as we can get
   if (!props.some((p) => p.kind === 'fountain')) {
-    const spot = freeSpotNear(Math.floor(w / 2), Math.floor(h / 2)) ?? { x: 2, y: 2 }
+    const mx = Math.floor(w / 2)
+    const my = Math.floor(h / 2)
+    let best: { x: number; y: number } | null = null
+    let bestD = Infinity
+    for (let y = 1; y < h - 1; y++)
+      for (let x = 1; x < w - 1; x++) {
+        if (getTile(x, y) !== 'plaza') continue
+        if (occupancy[idx(x, y)]) continue
+        if (!fountainSpotOk(x, y)) continue
+        const d = Math.abs(x - mx) + Math.abs(y - my)
+        if (d < bestD) {
+          bestD = d
+          best = { x, y }
+        }
+      }
+    const spot = best ?? freeSpotNear(mx, my) ?? { x: 2, y: 2 }
     addProp('fountain', spot.x, spot.y)
   }
 
@@ -1179,6 +1282,73 @@ export function generateCity(city: number, opts: { skipSolvabilityGuard?: boolea
     })
   }
 
+  // Final tidy, once every prop is down: a fountain ends beside a block or
+  // under a tree and never jammed against a shop door. Anything placed after
+  // the fountain itself can have crowded it, so the rule is enforced here. A
+  // lonely fountain gets a tree planted on the nearest free footpath, which is
+  // what makes it read as a landmark rather than a stray basin.
+  for (const f of props) {
+    if (f.kind !== 'fountain') continue
+    let tx = Math.floor(f.x / TS)
+    let ty = Math.floor(f.y / TS)
+    if (fountainCrowded(tx, ty, f.id)) {
+      // prefer paving, but a fountain that cannot find a clear plaza tile is
+      // better on the kerb than wedged against a stall
+      for (const wantPlaza of [true, false]) {
+        let moved = false
+        for (let r = 2; r <= 8 && !moved; r++)
+          for (let dy = -r; dy <= r && !moved; dy++)
+            for (let dx = -r; dx <= r && !moved; dx++) {
+              if (Math.abs(dx) < r && Math.abs(dy) < r) continue
+              const nx = tx + dx
+              const ny = ty + dy
+              if (nx < 1 || ny < 1 || nx >= w - 1 || ny >= h - 1) continue
+              const t2 = getTile(nx, ny)
+              if (wantPlaza ? t2 !== 'plaza' : !walkable(t2)) continue
+              if (occupancy[ny * w + nx]) continue
+              if (fountainCrowded(nx, ny, f.id)) continue
+              occupancy[ty * w + tx] = 0
+              f.x = (nx + 0.5) * TS
+              f.y = (ny + 0.5) * TS
+              occupancy[ny * w + nx] = 1
+              tx = nx
+              ty = ny
+              moved = true
+            }
+        if (moved) break
+      }
+      // still hemmed in? then the clutter steps aside instead: a bin, a shrub or
+      // a coin lying in the square is decoration, and none of it is worth
+      // spoiling the one landmark in the city for
+      for (const other of props) {
+        if (other.id === f.id || other.kind === 'tree' || other.blocking) continue
+        if (Math.abs(other.x - f.x) > 1.4 * TS || Math.abs(other.y - f.y) > 1.4 * TS) continue
+        const ox = Math.floor(other.x / TS)
+        const oy = Math.floor(other.y / TS)
+        search: for (let r = 1; r <= 4; r++)
+          for (let dy = -r; dy <= r; dy++)
+            for (let dx = -r; dx <= r; dx++) {
+              if (Math.abs(dx) < r && Math.abs(dy) < r) continue
+              const nx = ox + dx
+              const ny = oy + dy
+              if (nx < 1 || ny < 1 || nx >= w - 1 || ny >= h - 1) continue
+              if (occupancy[ny * w + nx] || !walkable(getTile(nx, ny))) continue
+              const px = (nx + 0.5) * TS
+              const py = (ny + 0.5) * TS
+              if (Math.abs(px - f.x) <= 1.6 * TS && Math.abs(py - f.y) <= 1.6 * TS) continue
+              occupancy[oy * w + ox] = 0
+              other.x = px
+              other.y = py
+              occupancy[ny * w + nx] = 1
+              break search
+            }
+      }
+    }
+    if (besideBlock(tx, ty) || treeNear(tx, ty)) continue
+    const t = sidewalkNear(tx, ty)
+    if (t) addProp('tree', t.x, t.y, { blocking: false })
+  }
+
   const propAt = new Map<number, Prop>()
   for (const p of props) propAt.set(p.id, p)
 
@@ -1208,6 +1378,7 @@ export function generateCity(city: number, opts: { skipSolvabilityGuard?: boolea
   // `skipSolvabilityGuard` exists for the dev self-test, which inspects raw
   // generation to explain why the guard had to fire.
   if (!opts.skipSolvabilityGuard) world.solvabilityFixes = ensureSolvable(world)
+
   return world
 }
 

@@ -81,6 +81,8 @@ body,
   width: 100%;
   height: 100%;
   display: block;
+  /* the street camera turns on a drag, so the canvas owns touch gestures */
+  touch-action: none;
 }
 
 .game-canvas.idle {
@@ -1026,21 +1028,70 @@ button.wide {
   }
 }
 
-.exit-chip {
+/* the in run chips share one centred row, clear of the HUD bars on the right */
+.top-chips {
   position: absolute;
   top: max(12px, env(safe-area-inset-top));
   left: 50%;
   transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  align-items: center;
   z-index: 12;
+}
+
+.exit-chip,
+.camera-chip {
+  position: static;
   font-size: 11px;
   letter-spacing: 1.5px;
   text-transform: uppercase;
   padding: 6px 12px;
   margin: 0;
   opacity: 0.6;
+  white-space: nowrap;
 }
 
-.exit-chip:hover {
+.exit-chip:hover,
+.camera-chip:hover {
+  opacity: 1;
+}
+
+.cam-picker {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin: 4px 0 6px;
+}
+
+.cam-option {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 10px;
+  line-height: 1.25;
+}
+
+/* three choices read as two across and one full width underneath, rather than
+   leaving a lonely half width card in the last row */
+.cam-picker.three .cam-option:nth-child(3) {
+  grid-column: 1 / -1;
+}
+
+.cam-option strong {
+  font-size: 13px;
+  letter-spacing: 0.5px;
+}
+
+.cam-option span {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.cam-option.active {
+  outline: 2px solid var(--neon, #ff5ce1);
   opacity: 1;
 }
 
@@ -1546,8 +1597,13 @@ button.wide {
     max-width: 86vw;
   }
 
-  .exit-chip {
+  .top-chips {
     top: calc(max(12px, env(safe-area-inset-top)) + 34px); /* clears the city label */
+    gap: 6px;
+  }
+
+  .exit-chip,
+  .camera-chip {
     font-size: 9.5px;
     padding: 5px 9px;
   }

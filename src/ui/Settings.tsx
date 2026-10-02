@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { SKINS } from '../game/brand'
-import type { Profile } from '../game/profile'
+import type { CameraMode, LookMode, Profile } from '../game/profile'
 import { SkinPicker } from './Onboarding'
 
 interface SettingsProps {
@@ -10,6 +10,10 @@ interface SettingsProps {
   onRename: (name: string) => void
   /** switch avatar skin */
   onChangeSkin: (skin: string) => void
+  /** pick the camera the run opens with */
+  onChangeCamera: (camera: CameraMode) => void
+  /** pick how the mouse turns the street camera */
+  onChangeLook: (look: LookMode) => void
   /** reopen the first time tour, for a player who wants it again */
   onReplayTutorial: () => void
   onReset: () => void
@@ -29,6 +33,8 @@ export function Settings({
   storageOk,
   onRename,
   onChangeSkin,
+  onChangeCamera,
+  onChangeLook,
   onReplayTutorial,
   onReset,
   onBack,
@@ -78,6 +84,56 @@ export function Settings({
           <h2>Character</h2>
           <SkinPicker value={profile.skin} onChange={onChangeSkin} />
           <p className="hint skin-blurb">{skinDef.blurb}</p>
+
+          <h2>Camera</h2>
+          <p className="hint">
+            The map view looks down on the whole block. The street camera drops to eye level and walks the city with
+            you. You can also flip between them mid run from the button in the top corner.
+          </p>
+          <div className="cam-picker">
+            <button
+              className={profile.settings.camera === 'top' ? 'cam-option active' : 'cam-option'}
+              onClick={() => onChangeCamera('top')}
+            >
+              <strong>Map view</strong>
+              <span>See the whole street from above</span>
+            </button>
+            <button
+              className={profile.settings.camera === 'walk' ? 'cam-option active' : 'cam-option'}
+              onClick={() => onChangeCamera('walk')}
+            >
+              <strong>Street view</strong>
+              <span>Walk the pavement at eye level</span>
+            </button>
+          </div>
+
+          <h2>Mouse look</h2>
+          <p className="hint">
+            How the mouse turns the street camera. A phone always looks by dragging with a finger.
+          </p>
+          <div className="cam-picker three">
+            <button
+              className={profile.settings.look === 'drag' ? 'cam-option active' : 'cam-option'}
+              onClick={() => onChangeLook('drag')}
+            >
+              <strong>Right button drag</strong>
+              <span>Hold the right button and sweep to look around</span>
+            </button>
+            <button
+              className={profile.settings.look === 'free' ? 'cam-option active' : 'cam-option'}
+              onClick={() => onChangeLook('free')}
+            >
+              <strong>Free look</strong>
+              <span>Click the street once to take the mouse, then look by moving it. Escape lets go</span>
+            </button>
+            <button
+              className={profile.settings.look === 'off' ? 'cam-option active' : 'cam-option'}
+              onClick={() => onChangeLook('off')}
+            >
+              <strong>Mouse off</strong>
+              <span>The mouse never moves the view</span>
+            </button>
+          </div>
 
           <h2>How to play</h2>
           <p className="hint">

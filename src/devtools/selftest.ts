@@ -25,7 +25,14 @@ import {
   mapSize,
 } from '../game/city'
 import { Game, dayHour, dayLight } from '../game/engine'
-import { PROFILE_KEY, freshProfile, loadProfile, saveProfile, storageAvailable } from '../game/profile'
+import {
+  PROFILE_KEY,
+  freshProfile,
+  loadProfile,
+  saveProfile,
+  storageAvailable,
+  type LookMode,
+} from '../game/profile'
 import { RECORDS_KEY, clearRecords, fmtClock, loadRecords, recordCityTime, recordRun } from '../game/records'
 import { render } from '../game/render'
 import { sfx } from '../game/sound'
@@ -163,6 +170,38 @@ function meanLuminance(ctx: CanvasRenderingContext2D, w: number, h: number): num
 /* generation                                                          */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Pick a clear straight approach to a coin for the pickup tests. Coin scatter
+ * floats with the prop table, so a fixed "walk right" start could begin behind a
+ * block; this finds a side with an open three tile run and the key that walks in.
+ */
+function coinApproach(world: World, coin: { x: number; y: number }): { x: number; y: number; key: string } | null {
+  const cx = Math.floor(coin.x / TS)
+  const cy = Math.floor(coin.y / TS)
+  const open = (x: number, y: number) => {
+    if (x < 0 || y < 0 || x >= world.w || y >= world.h) return false
+    const t = world.tiles[y * world.w + x]
+    if (t !== 'road' && t !== 'sidewalk' && t !== 'plaza' && t !== 'park') return false
+    for (const pr of world.props)
+      if (pr.blocking && !pr.used && Math.abs(pr.x - ((x + 0.5) * TS)) < 24 && Math.abs(pr.y - ((y + 0.5) * TS)) < 24)
+        return false
+    return true
+  }
+  const dirs: Array<[number, number, string]> = [
+    [-1, 0, 'KeyD'],
+    [1, 0, 'KeyA'],
+    [0, -1, 'KeyS'],
+    [0, 1, 'KeyW'],
+  ]
+  for (const [dx, dy, key] of dirs) {
+    let clear = true
+    for (let step = 1; step <= 3 && clear; step++) if (!open(cx + dx * step, cy + dy * step)) clear = false
+    if (!clear) continue
+    return { x: (cx + dx * 3 + 0.5) * TS, y: (cy + dy * 3 + 0.5) * TS, key }
+  }
+  return null
+}
+
 function generationTests(s: Suite): void {
   const worlds: World[] = []
   let sizeOk = true
@@ -178,6 +217,10 @@ function generationTests(s: Suite): void {
   let guardOk = true
   let guardDetail = ''
   let chainRepeat = ''
+  let treeOff = ''
+  let treeCount = 0
+  let pondCities = 0
+  let pondOff = ''
   const riddleLines = new Set<string>()
   let clueLines = 0
   let fixes = 0
@@ -230,6 +273,35 @@ function generationTests(s: Suite): void {
       chainRepeat ||= `city ${city}: ${w.clues.length - chainLines.size} repeated line(s)`
     for (const line of chainLines) riddleLines.add(line)
     clueLines += w.clues.length
+    // trees must line the footpaths and nothing else
+    for (const pr of w.props) {
+      if (pr.kind !== 'tree') continue
+      treeCount++
+      const tx = Math.floor(pr.x / TS)
+      const ty = Math.floor(pr.y / TS)
+      if (tx < 0 || ty < 0 || tx >= w.w || ty >= w.h || w.tiles[ty * w.w + tx] !== 'sidewalk')
+        treeOff ||= `city ${city} tree on ${w.tiles[ty * w.w + tx]}`
+    }
+    // ponds: water only ever ringed by paving, never against a building or wall
+    let water = 0
+    for (let y = 0; y < w.h; y++)
+      for (let x = 0; x < w.w; x++) {
+        if (w.tiles[y * w.w + x] !== 'water') continue
+        water++
+        for (const [dx, dy] of [
+          [1, 0],
+          [-1, 0],
+          [0, 1],
+          [0, -1],
+        ] as Array<[number, number]>) {
+          const nx = x + dx
+          const ny = y + dy
+          if (nx < 0 || ny < 0 || nx >= w.w || ny >= w.h) continue
+          const nt = w.tiles[ny * w.w + nx]
+          if (nt === 'building' || nt === 'wall') pondOff ||= `city ${city} water beside ${nt}`
+        }
+      }
+    if (water > 0) pondCities++
     if (!w.entryHint) {
       hintOk = false
       hintDetail ||= `city ${city}: no entry hint`
@@ -304,6 +376,48 @@ function generationTests(s: Suite): void {
     'the solvability pass rarely has to intervene',
     fixes <= 20,
     `${fixes} prop blocking flags downgraded across 100 cities · ${worstCities.slice(0, 12).join(' ')}`,
+  )
+  s.check(
+    'every tree stands on a footpath and none on the road or the grass',
+    treeOff === '' && treeCount > 0,
+    treeOff || `${treeCount} trees, all on sidewalks`,
+  )
+  s.check(
+    'ponds sit at the crossroads ringed by paving, never against a wall',
+    pondOff === '' && pondCities >= 80,
+    pondOff || `water in ${pondCities} of 100 cities, all ringed`,
+  )
+  // a fountain wants a neighbour and some room: beside a block or a tree, with
+  // no other prop crowding it
+  let fountainBad = ''
+  for (const w of worlds) {
+    for (const f of w.props.filter((p) => p.kind === 'fountain')) {
+      const tx = Math.floor(f.x / TS)
+      const ty = Math.floor(f.y / TS)
+      const beside =
+        w.tiles[(ty - 1) * w.w + tx] === 'building' ||
+        w.tiles[(ty + 1) * w.w + tx] === 'building' ||
+        w.tiles[ty * w.w + tx - 1] === 'building' ||
+        w.tiles[ty * w.w + tx + 1] === 'building'
+      const treeNear = w.props.some(
+        (p) =>
+          p.kind === 'tree' && Math.abs(p.x - f.x) <= 2.5 * TS && Math.abs(p.y - f.y) <= 2.5 * TS,
+      )
+      // a tree is a neighbour, not clutter: only other furniture crowds
+      const crowded = w.props.some(
+        (p) =>
+          p.id !== f.id &&
+          p.kind !== 'tree' &&
+          Math.abs(p.x - f.x) <= 1.4 * TS &&
+          Math.abs(p.y - f.y) <= 1.4 * TS,
+      )
+      if ((!beside && !treeNear) || crowded) fountainBad ||= `city ${w.city} fountain at ${tx},${ty}`
+    }
+  }
+  s.check(
+    'a fountain stands beside a block or a tree, never crowded',
+    fountainBad === '',
+    fountainBad || 'every fountain has a neighbour and room to breathe',
   )
 }
 
@@ -698,17 +812,18 @@ function survivalTests(s: Suite): void {
   const g3 = new Game(2, 0, 0, { profile: freshProfile('Collector') })
   g3.world.guards.length = 0
   const coin = g3.world.props.find((x) => x.kind === 'coin')
-  if (coin) {
+  const start1 = coin ? coinApproach(g3.world, coin) : null
+  if (coin && start1) {
     // stand well away first, so the walk over it is what does the collecting
-    g3.player.x = coin.x - 5 * TS
-    g3.player.y = coin.y
+    g3.player.x = start1.x
+    g3.player.y = start1.y
     g3.tick(1 / 60)
     const before = g3.player.coins
-    for (let i = 0; i < 200 && !coin.used; i++) {
-      g3.setKey('KeyD', true)
+    for (let i = 0; i < 300 && !coin.used; i++) {
+      g3.setKey(start1.key, true)
       g3.tick(1 / 60)
     }
-    g3.setKey('KeyD', false)
+    g3.setKey(start1.key, false)
     s.check('walking over a $DLI token pockets it', coin.used && g3.player.coins > before, `${before} → ${g3.player.coins} $DLI`)
     // and the standing prompt no longer asks for a keypress
     g3.player.x = coin.x
@@ -831,6 +946,40 @@ function guardTests(s: Suite): void {
     )
   } else {
     s.check('city 4 has a guard and a building to wedge', false)
+  }
+
+  // ---- the runner keeps off the blocks ----
+  // Walk hard into a block face from the open street and the border must hold:
+  // the sprite is a body, not a point, so its shoulders may not cross either.
+  const wall = new Game(3, 0, 0, { profile: freshProfile('Wall') })
+  wall.world.guards.length = 0
+  const openTile = (t: TileKind | undefined) => t === 'road' || t === 'sidewalk' || t === 'plaza' || t === 'park'
+  let target = -1
+  for (let i = 0; i < wall.world.tiles.length && target < 0; i++) {
+    if (wall.world.tiles[i] !== 'building') continue
+    const x = i % wall.world.w
+    const y = Math.floor(i / wall.world.w)
+    if (y + 1 < wall.world.h && openTile(wall.world.tiles[(y + 1) * wall.world.w + x])) target = i
+  }
+  if (target >= 0) {
+    const x = target % wall.world.w
+    const y = Math.floor(target / wall.world.w)
+    wall.player.x = (x + 0.5) * TS
+    wall.player.y = (y + 1.5) * TS
+    wall.player.vx = 0
+    wall.player.vy = 0
+    wall.setKey('KeyW', true)
+    for (let i = 0; i < 120; i++) wall.tick(1 / 60)
+    wall.setKey('KeyW', false)
+    const tx = Math.floor(wall.player.x / TS)
+    const ty = Math.floor(wall.player.y / TS)
+    s.check(
+      'the runner cannot walk into a block',
+      wall.world.tiles[ty * wall.world.w + tx] !== 'building',
+      `ended on tile ${tx},${ty}`,
+    )
+  } else {
+    s.check('a city has a block with an open street in front of it', false)
   }
 }
 
@@ -1069,7 +1218,7 @@ function profileTests(s: Suite): void {
   p.run = { city: 42, day: 3, daysInCity: 2, hunger: 55.5, thirst: 44.25, health: 91, coins: 137, food: 4, water: 5, clueIndex: 3 }
   p.stats = { attempts: 12, solves: 9, deaths: 2, citiesCleared: 41, timePlayedSec: 1234.5 }
   p.lore = { fringe: true, rustwater: true }
-  p.settings = { sound: false }
+  p.settings = { sound: false, camera: 'walk', look: 'free' }
   p.onboarded = true
   saveProfile(p)
 
@@ -1083,6 +1232,8 @@ function profileTests(s: Suite): void {
       back.run?.clueIndex === 3 &&
       back.lore.fringe === true &&
       back.settings.sound === false &&
+      back.settings.camera === 'walk' &&
+      back.settings.look === 'free' &&
       back.stats.citiesCleared === 41 &&
       back.onboarded === true,
     back ? `bestCity ${back.bestCity}, coins ${back.run?.coins}, sound ${back.settings.sound}` : 'no profile',
@@ -1366,15 +1517,16 @@ function soundTests(s: Suite): void {
   const g3 = new Game(2, 0, 0, { profile: freshProfile('Coins') })
   g3.world.guards.length = 0
   const coin = g3.world.props.find((x) => x.kind === 'coin')
-  if (coin) {
-    g3.player.x = coin.x - 5 * TS
-    g3.player.y = coin.y
+  const start3 = coin ? coinApproach(g3.world, coin) : null
+  if (coin && start3) {
+    g3.player.x = start3.x
+    g3.player.y = start3.y
     g3.tick(1 / 60)
-    for (let i = 0; i < 200 && !coin.used; i++) {
-      g3.setKey('KeyD', true)
+    for (let i = 0; i < 300 && !coin.used; i++) {
+      g3.setKey(start3.key, true)
       g3.tick(1 / 60)
     }
-    g3.setKey('KeyD', false)
+    g3.setKey(start3.key, false)
     s.check('pocketing $DLI chimes', coin.used && sfx.getLast() === 'coin', `last ${sfx.getLast()}`)
   } else {
     s.check('city 2 has a $DLI token to chime over', false)
@@ -1467,6 +1619,154 @@ function soundTests(s: Suite): void {
 /* entry point                                                         */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* camera                                                              */
+/* ------------------------------------------------------------------ */
+
+function cameraTests(s: Suite): void {
+  const prof = freshProfile('Director')
+  const game = new Game(3, 0, 0, { profile: prof })
+  game.world.guards.length = 0
+
+  s.check(
+    'a run opens on the map camera and remembers the choice',
+    game.cameraMode === 'top' && prof.settings.camera === 'top',
+    `camera ${game.cameraMode}`,
+  )
+  game.setCameraMode('walk')
+  s.check('switching to the street camera takes effect on the run', game.cameraMode === 'walk')
+  s.check('the street camera choice is written to the profile', prof.settings.camera === 'walk')
+  s.check('the snapshot reports the live camera', game.getSnapshot().camera === 'walk')
+  game.setCameraMode('walk')
+  const y0 = game.camYaw
+  game.look(120, 0)
+  // the turn is eased, so the aim moves at once and the heading follows on tick
+  s.check('dragging aims the street camera', Math.abs(game.camYaw - y0) < 0.001, 'heading held until the ease runs')
+  for (let i = 0; i < 30; i++) game.tick(1 / 60)
+  s.check('the street camera eases round to the aim', Math.abs(game.camYaw - y0) > 0.3, `yaw ${game.camYaw.toFixed(2)}`)
+  game.look(0, 1000)
+  for (let i = 0; i < 30; i++) game.tick(1 / 60)
+  s.check('looking up and down stays within its limits', Math.abs(game.camPitch) <= 0.45)
+
+  // how the mouse looks is a setting like the camera, and it is the view layer
+  // that reads it, so the test drives the same field the wiring does
+  s.check(
+    'a run opens with the right button drag look',
+    game.lookMode === 'drag' && prof.settings.look === 'drag',
+    `look ${game.lookMode}`,
+  )
+  game.setLookMode('free')
+  s.check('the look choice is written to the profile', prof.settings.look === 'free', `profile ${prof.settings.look}`)
+  s.check('the snapshot reports the live look mode', game.getSnapshot().look === 'free')
+  game.setLookMode('sideways' as LookMode)
+  s.check('a junk look mode falls back to the right button drag', game.lookMode === 'drag', `look ${game.lookMode}`)
+
+  // the look is a drag and nothing else: a pointer that is merely resting, or
+  // sitting off centre, must never move the camera on its own
+  for (let i = 0; i < 150; i++) game.tick(1 / 60)
+  game.camPitch = 0
+  const yStill = game.camYaw
+  for (let i = 0; i < 150; i++) game.tick(1 / 60)
+  s.check(
+    'the camera holds dead still while no drag is held',
+    Math.abs(game.camYaw - yStill) < 0.0001,
+    `drift ${Math.abs(game.camYaw - yStill).toFixed(5)}`,
+  )
+  // a sweep arrives as a stream of small drag events, not one huge jump
+  const ySwept = game.camYaw
+  for (let i = 0; i < 6; i++) game.look(60, 0)
+  for (let i = 0; i < 60; i++) game.tick(1 / 60)
+  const yTurned = game.camYaw
+  s.check('sweeping the mouse with the button held turns the camera', Math.abs(yTurned - ySwept) > 0.5, `yaw ${yTurned.toFixed(2)}`)
+  // release the button: the turn has to stop where it was left
+  for (let i = 0; i < 150; i++) game.tick(1 / 60)
+  s.check(
+    'releasing the button leaves the camera where it stopped',
+    Math.abs(game.camYaw - yTurned) < 0.01,
+    `drift ${Math.abs(game.camYaw - yTurned).toFixed(4)}`,
+  )
+  // one absurd event, as a pointer jump or a tab switch delivers
+  game.look(100000, 0)
+  for (let i = 0; i < 60; i++) game.tick(1 / 60)
+  s.check(
+    'a wild pointer jump cannot fling the view round',
+    Math.abs(game.camYaw - yTurned) <= 0.6,
+    `moved ${Math.abs(game.camYaw - yTurned).toFixed(3)}`,
+  )
+  game.setCameraMode('top')
+  const y1 = game.camYaw
+  game.look(120, 0)
+  s.check('the map view ignores the look input', game.camYaw === y1)
+  game.setCameraMode('walk')
+  game.toggleCamera()
+  s.check('toggling flips back to the map camera', game.cameraMode === 'top')
+
+  // leave it on the street camera so the save round trip has something to check
+  game.setCameraMode('walk')
+  saveProfile(prof)
+  const back = loadProfile()
+  s.check('the camera choice survives a save and load', back?.settings.camera === 'walk', `loaded ${back?.settings.camera}`)
+
+  // crossing into the next city must open looking down the road into town: the
+  // old camera heading used to survive the border, which could leave the runner
+  // staring straight at the wall
+  const arriving = new Game(1, 0, 0, { profile: freshProfile('Arriving') })
+  arriving.setCameraMode('walk')
+  // leave the camera swung round and tilted up, the state a runner can cross
+  // the border in
+  arriving.camYaw = 2.7
+  arriving.camPitch = 0.3
+  arriving.nextCity()
+  for (let i = 0; i < 30; i++) arriving.tick(1 / 60)
+  const aWorld = arriving.world
+  const aTile = aWorld.tiles[
+    Math.floor(arriving.player.y / TS) * aWorld.w + Math.floor(arriving.player.x / TS)
+  ]
+  let roadAhead = 0
+  const dirX = Math.round(Math.cos(arriving.camYaw))
+  const dirY = Math.round(Math.sin(arriving.camYaw))
+  for (let step = 1; step <= 8; step++) {
+    const tx = Math.floor(arriving.player.x / TS) + dirX * step
+    const ty = Math.floor(arriving.player.y / TS) + dirY * step
+    if (tx < 0 || ty < 0 || tx >= aWorld.w || ty >= aWorld.h) break
+    const t = aWorld.tiles[ty * aWorld.w + tx]
+    if (t === 'road' || t === 'sidewalk' || t === 'plaza' || t === 'park') roadAhead++
+  }
+  s.check(
+    'a new city opens with the camera facing the way in',
+    Math.abs(arriving.camYaw - arriving.player.facing) < 0.01 && Math.abs(arriving.camPitch) < 0.01,
+    `yaw ${arriving.camYaw.toFixed(2)}, pitch ${arriving.camPitch.toFixed(2)}`,
+  )
+  s.check(
+    'the runner arrives standing on a road',
+    aTile === 'road' || aTile === 'sidewalk' || aTile === 'plaza',
+    `spawn tile ${aTile}`,
+  )
+  s.check('the road into a new city is open ahead', roadAhead >= 6, `${roadAhead} of 8 tiles walkable`)
+
+  // the walking projection must draw a frame without throwing, day and night
+  let rendered = true
+  let detail = ''
+  try {
+    const ctx = document.createElement('canvas').getContext('2d')
+    if (!ctx) {
+      rendered = false
+      detail = 'no 2d context'
+    } else {
+      game.setCameraMode('walk')
+      for (const t of [0, 0.45, 0.85]) {
+        game.timeSec = game.world.dayLengthSec * t
+        render(ctx, game, 640, 360)
+      }
+      detail = 'three frames drawn'
+    }
+  } catch (err) {
+    rendered = false
+    detail = `${err}`
+  }
+  s.check('the street camera renders a frame without throwing', rendered, detail)
+}
+
 export function runSelfTest(): SelfTestReport {
   const s = new Suite()
   const savedSave = readRaw(PROFILE_KEY)
@@ -1480,6 +1780,7 @@ export function runSelfTest(): SelfTestReport {
     cityTypeTests(s)
     survivalTests(s)
     guardTests(s)
+    cameraTests(s)
     soundTests(s)
     puzzleTests(s)
     renderTests(s)

@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { BRAND } from './game/brand'
 import { Game } from './game/engine'
-import { freshProfile, loadProfile, resetProfile, saveProfile, storageAvailable, type Profile } from './game/profile'
+import {
+  freshProfile,
+  loadProfile,
+  resetProfile,
+  saveProfile,
+  storageAvailable,
+  type CameraMode,
+  type LookMode,
+  type Profile,
+} from './game/profile'
 import { clearRecords } from './game/records'
 import { render } from './game/render'
 import { sfx } from './game/sound'
@@ -120,6 +129,108 @@ export default function App() {
     }
   }, [])
 
+  /* ---------------- look controls (street camera) ---------------- */
+
+  /**
+   * How the street view looks around, driven by one setting on the profile:
+   *  - `drag` (the default): a mouse holds the RIGHT button and sweeps to turn.
+   *    Nothing happens on a plain hover, so moving the cursor toward a chip, or
+   *    leaving it parked by an edge, can never take the camera with it;
+   *  - `free`: the view follows every mouse move with no button at all, and a
+   *    click on the canvas takes the cursor with pointer lock so it cannot leave
+   *    the window mid turn. Escape hands the pointer back for the buttons on
+   *    screen, and a browser that refuses the lock still gets the mouse look;
+   *  - `off`: the mouse is left alone entirely.
+   * A finger drags to look whatever the setting says, because a phone has no
+   * right button; the stick lives on its own element, so a thumb on it and a
+   * finger turning the view work at the same time. Every path feeds the same
+   * smoothed aim on the engine, so the turn is eased rather than snapped, and
+   * the map view has no heading and ignores all of it.
+   */
+  useEffect(() => {
+    if (!ENGINE_READY) return
+    const canvas = canvasRef.current
+    if (!canvas) return
+    let dragging = false
+    let lastX = 0
+    let lastY = 0
+
+    const locked = () => document.pointerLockElement === canvas
+
+    const down = (e: PointerEvent) => {
+      const g = gameRef.current
+      if (!g || g.cameraMode !== 'walk' || g.status !== 'playing') return
+      if (e.pointerType === 'mouse') {
+        if (g.lookMode === 'free') {
+          // free look needs the cursor, and a click is the gesture that asks for
+          // it: from here on every move turns the view, no button to hold
+          e.preventDefault()
+          if (!locked()) void canvas.requestPointerLock?.()
+          return
+        }
+        // the right button drag is the default; anything else is the page's
+        if (g.lookMode !== 'drag' || e.button !== 2) return
+      }
+      dragging = true
+      lastX = e.clientX
+      lastY = e.clientY
+      // a right button drag must not raise the browser's own menu mid turn
+      e.preventDefault()
+      canvas.setPointerCapture?.(e.pointerId)
+    }
+    const move = (e: PointerEvent) => {
+      const g = gameRef.current
+      if (!g || g.cameraMode !== 'walk') return
+      if (e.pointerType === 'mouse') {
+        // Free look follows every mouse move. The pointer lock is the reason the
+        // cursor cannot escape the window while you turn, not the reason the
+        // turning works: a browser that refuses the lock still gets mouse look,
+        // and events only reach here while the cursor is over the street rather
+        // than over a button on the HUD.
+        if (g.lookMode === 'free') {
+          if (e.movementX !== 0 || e.movementY !== 0) {
+            g.look(e.movementX, e.movementY)
+            if (locked()) e.preventDefault()
+          }
+          return
+        }
+        if (g.lookMode !== 'drag') return
+      }
+      if (!dragging) return
+      // the button can be let go outside the window; a mouse with nothing held is
+      // not a drag, whatever the last event happened to say
+      if (e.pointerType === 'mouse' && e.buttons === 0) {
+        dragging = false
+        return
+      }
+      g.look(e.clientX - lastX, e.clientY - lastY)
+      lastX = e.clientX
+      lastY = e.clientY
+      e.preventDefault()
+    }
+    const up = (e: PointerEvent) => {
+      dragging = false
+      canvas.releasePointerCapture?.(e.pointerId)
+    }
+    /** the context menu belongs to the page, not to a camera drag */
+    const menu = (e: Event) => {
+      const g = gameRef.current
+      if (g && g.cameraMode === 'walk' && g.lookMode === 'drag') e.preventDefault()
+    }
+    canvas.addEventListener('pointerdown', down)
+    canvas.addEventListener('pointermove', move)
+    canvas.addEventListener('pointerup', up)
+    canvas.addEventListener('pointercancel', up)
+    canvas.addEventListener('contextmenu', menu)
+    return () => {
+      canvas.removeEventListener('pointerdown', down)
+      canvas.removeEventListener('pointermove', move)
+      canvas.removeEventListener('pointerup', up)
+      canvas.removeEventListener('pointercancel', up)
+      canvas.removeEventListener('contextmenu', menu)
+    }
+  }, [])
+
   /* ---------------- keyboard ---------------- */
 
   useEffect(() => {
@@ -223,6 +334,35 @@ export default function App() {
     else setScreen('menu')
   }, [launch, persist, tut])
 
+  /**
+   * Camera choice: remembered on the profile and pushed into a live game so the
+   * swap is instant. Works from the settings menu (no game open) and from the
+   * in run chip alike.
+   */
+  const setCamera = useCallback((camera: CameraMode) => {
+    const live = profileRef.current
+    if (live) {
+      live.settings.camera = camera
+      saveProfile(live)
+      setProfile({ ...live })
+    }
+    gameRef.current?.setCameraMode(camera)
+    // the map view has no heading, so a held cursor is just a hidden pointer
+    if (camera !== 'walk' && document.pointerLockElement) document.exitPointerLock?.()
+  }, [])
+
+  const setLook = useCallback((look: LookMode) => {
+    const live = profileRef.current
+    if (live) {
+      live.settings.look = look
+      saveProfile(live)
+      setProfile({ ...live })
+    }
+    gameRef.current?.setLookMode(look)
+    // turning free look off should hand the cursor straight back
+    if (look !== 'free' && document.pointerLockElement) document.exitPointerLock?.()
+  }, [])
+
   const backToMenu = useCallback(() => {
     gameRef.current?.saveNow()
     sfx.stopAmbient()
@@ -249,9 +389,18 @@ export default function App() {
           <HUD snap={snap} />
           <TouchControls game={g} snap={snap} />
           <Menus snap={snap} gameRef={gameRef} onNew={() => launch(1, true)} />
-          <button className="exit-chip" onClick={backToMenu} title="Save and return to menu">
-            ⌂ menu
-          </button>
+          <div className="top-chips">
+            <button className="exit-chip" onClick={backToMenu} title="Save and return to menu">
+              ⌂ menu
+            </button>
+            <button
+              className="camera-chip"
+              onClick={() => setCamera(g.cameraMode === 'walk' ? 'top' : 'walk')}
+              title="Switch between the map view and the street camera"
+            >
+              {g.cameraMode === 'walk' ? '3D street' : '2D map'}
+            </button>
+          </div>
         </>
       )}
 
@@ -295,6 +444,7 @@ export default function App() {
           onSettings={() => setScreen('settings')}
           onHowToPlay={() => setScreen('howto')}
           onRanking={() => setScreen('ranking')}
+          onChangeCamera={setCamera}
         />
       )}
 
@@ -306,6 +456,8 @@ export default function App() {
           storageOk={storageOk}
           onRename={(name) => persist({ name })}
           onChangeSkin={(skin) => persist({ skin })}
+          onChangeCamera={setCamera}
+          onChangeLook={setLook}
           onReplayTutorial={() => {
             setTut({ launch: null })
             setScreen('tutorial')

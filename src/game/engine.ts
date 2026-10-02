@@ -8,7 +8,7 @@ import {
   regionIndexForCity,
 } from './city'
 import { DEFAULT_SKIN_ID } from './brand'
-import { saveProfile, type Profile, type RunState } from './profile'
+import { cleanLook, saveProfile, type CameraMode, type LookMode, type Profile, type RunState } from './profile'
 import { recordCityTime, recordRun } from './records'
 import { RNG } from './rng'
 import { sfx } from './sound'
@@ -50,6 +50,10 @@ export interface Snapshot {
   toasts: Toast[]
   caughtTimer: number
   deathReason: string
+  /** which camera the run is using: the raised map or the eye level street cam */
+  camera: CameraMode
+  /** how the mouse turns the street camera: right drag, free look, or neither */
+  look: LookMode
   daysInCity: number
   deaths: number
   totalDays: number
@@ -126,6 +130,14 @@ export function dayLight(frac: number): { darkness: number; night: boolean } {
   else darkness = MAX_DARKNESS * (1 - (f - 0.875) / 0.125) // dawn climb back to sunrise
   // guards get sharper once the street is genuinely dim, not at the first hint of dusk
   return { darkness, night: darkness >= 0.3 }
+}
+
+/** shortest way round the circle from `a` toward `b`, eased by `t` (0..1) */
+function approachAngle(a: number, b: number, t: number): number {
+  let d = b - a
+  while (d > Math.PI) d -= Math.PI * 2
+  while (d < -Math.PI) d += Math.PI * 2
+  return a + d * Math.min(1, Math.max(0, t))
 }
 
 /** clock hour (0 to 23) for a day fraction, so the HUD agrees with the light */
@@ -210,6 +222,26 @@ export class Game {
   private stepTimer = 0
   /** was a dialog or puzzle panel up last frame, so its opening cue fires once */
   private boxOpen = false
+  /** see Snapshot.camera — set from the profile at boot, toggled in game */
+  cameraMode: CameraMode = 'top'
+  /**
+   * How the mouse turns the street camera. The input wiring lives in the view
+   * layer, which reads this and nothing else, so the choice is one field here
+   * and one setting in the profile.
+   */
+  lookMode: LookMode = 'drag'
+  /**
+   * Heading of the street camera, in radians. The renderer looks along it and
+   * the street view walks relative to it, so W always heads into the screen.
+   */
+  camYaw = 0
+  /** look up or down a little, in the street view (right button drag / touch) */
+  camPitch = 0
+  /** where the street camera is aiming; camYaw and camPitch ease toward it */
+  private yawTarget = 0
+  private pitchTarget = 0
+  /** seconds left during which the player's look wins over the walk recentre */
+  private lookHold = 0
 
   constructor(city: number, deaths = 0, totalDays = 0, opts: GameOptions = {}) {
     this.world = generateCity(Math.max(1, Math.min(100, Math.round(city))))
@@ -219,7 +251,10 @@ export class Game {
     // the saved mute flag drives the whole sound subsystem from one place
     sfx.setEnabled(this.profile ? this.profile.settings.sound !== false : true)
     this.skinId = opts.skinId ?? this.profile?.skin ?? DEFAULT_SKIN_ID
+    this.cameraMode = this.profile?.settings.camera === 'walk' ? 'walk' : 'top'
+    this.lookMode = this.profile ? cleanLook(this.profile.settings.look) : 'drag'
     this.player = this.makePlayer(opts.resume ?? null)
+    this.camYaw = this.player.facing
     if (this.profile) {
       this.profile.stats.attempts++
       this.profile.skin = this.skinId
@@ -236,6 +271,79 @@ export class Game {
 
   getSkin(): string {
     return this.skinId
+  }
+
+  /**
+   * Switch between the raised map view and the eye level street camera. Writing
+   * straight through to the profile means the choice is remembered next time the
+   * runner plays, and it never touches the save's integrity fingerprint.
+   */
+  setCameraMode(mode: CameraMode) {
+    const next = mode === 'walk' ? 'walk' : 'top'
+    // stepping into the street view starts the camera behind the runner, so the
+    // first frame already looks the way they were heading
+    if (next === 'walk' && this.cameraMode !== 'walk') {
+      this.camYaw = this.player.facing
+      this.yawTarget = this.player.facing
+      this.camPitch = 0
+      this.pitchTarget = 0
+    }
+    this.cameraMode = next
+    if (this.profile) {
+      this.profile.settings.camera = this.cameraMode
+      saveProfile(this.profile)
+    }
+    this.emit()
+  }
+
+  toggleCamera(): CameraMode {
+    this.setCameraMode(this.cameraMode === 'walk' ? 'top' : 'walk')
+    return this.cameraMode
+  }
+
+  /**
+   * Choose how the mouse looks around: hold the right button and sweep, follow
+   * the mouse freely with no button at all, or leave looking to touch and the
+   * keyboard. Written straight through to the profile so it is remembered, and
+   * kept out of the save fingerprint so it can never cost anyone a run.
+   */
+  setLookMode(mode: LookMode) {
+    this.lookMode = cleanLook(mode)
+    if (this.profile) {
+      this.profile.settings.look = this.lookMode
+      saveProfile(this.profile)
+    }
+    this.emit()
+  }
+
+  /**
+   * Look around from the street camera. Only the AIM moves here, and the real
+   * heading eases toward it every frame, which is what keeps a turn smooth
+   * instead of snapped. `dx` and `dy` are the pointer's own movement in pixels,
+   * delivered while a drag is held, so the view turns by how far the mouse or
+   * finger just travelled and never by where the pointer happens to sit: a cursor
+   * parked toward one edge cannot send the camera spinning on its own. Ignored by
+   * the map view, which has no heading.
+   */
+  look(dx: number, dy: number) {
+    if (this.cameraMode !== 'walk') return
+    // a fast flick really does arrive as one big jump, so the cap is generous: it
+    // only exists to stop a wild event (a tab switch, a stray pointer jump) from
+    // snapping the view round
+    const cx = Math.max(-120, Math.min(120, dx))
+    const cy = Math.max(-120, Math.min(120, dy))
+    this.yawTarget += cx * 0.0048
+    this.pitchTarget = Math.max(-0.45, Math.min(0.45, this.pitchTarget + cy * 0.0032))
+    this.lookHold = 1.1
+  }
+
+  /** the aim eases toward the target, so every look is a smooth turn */
+  private easeLook(dt: number) {
+    if (this.cameraMode !== 'walk') return
+    if (this.lookHold > 0) this.lookHold -= dt
+    const k = Math.min(1, dt * 6)
+    this.camYaw = approachAngle(this.camYaw, this.yawTarget, k)
+    this.camPitch += (this.pitchTarget - this.camPitch) * k
   }
 
   private makePlayer(resume: RunState | null = null): PlayerState {
@@ -454,14 +562,45 @@ export class Game {
 
   private simulate(dt: number) {
     const p = this.player
-    const axis = this.axis()
-    axis.x += this.touchAxis.x
-    axis.y += this.touchAxis.y
-    const len = Math.hypot(axis.x, axis.y)
-    if (len > 1) {
-      axis.x /= len
-      axis.y /= len
+    const input = this.axis()
+    input.x += this.touchAxis.x
+    input.y += this.touchAxis.y
+    const iLen = Math.hypot(input.x, input.y)
+    if (iLen > 1) {
+      input.x /= iLen
+      input.y /= iLen
     }
+
+    // How the stick maps onto the world depends on the camera:
+    //  - the map view walks the world axes (up on screen is north);
+    //  - the street view walks relative to where the camera looks, so W always
+    //    heads into the screen and A / D step sideways across it.
+    let wx = input.x
+    let wy = input.y
+    if (this.cameraMode === 'walk') {
+      const fwd = -input.y
+      const strafe = input.x
+      const cs = Math.cos(this.camYaw)
+      const sn = Math.sin(this.camYaw)
+      // screen right is world (sin, -cos) for a camera looking along (cos, sin),
+      // so A steps left across the view and D steps right
+      wx = cs * fwd + sn * strafe
+      wy = sn * fwd - cs * strafe
+      const wl = Math.hypot(wx, wy)
+      if (wl > 1) {
+        wx /= wl
+        wy /= wl
+      }
+      // pushing forward swings the camera round behind the runner; a strafe or a
+      // step back leaves the heading alone so the street never spins underfoot.
+      // While the player is looking around, their aim wins and the recentre waits.
+      const looking = this.lookHold > 0
+      if (!looking && fwd > 0.12 && Math.abs(fwd) >= Math.abs(strafe)) {
+        this.yawTarget = approachAngle(this.yawTarget, Math.atan2(wy, wx), dt * 3.4)
+      }
+    }
+
+    const len = Math.hypot(wx, wy)
     p.moving = len > 0.1
     p.running = (this.wantRun || this.touchRun) && p.moving && !p.hidden
     this.stepSound(dt)
@@ -475,8 +614,8 @@ export class Game {
     const runSpeed = 5.6 * TS
     const speed = (p.running ? runSpeed : baseSpeed) * (p.hidden ? 0.4 : 1) * (p.hunger <= 0 || p.thirst <= 0 ? 0.55 : 1)
 
-    const targetVx = axis.x * speed
-    const targetVy = axis.y * speed
+    const targetVx = wx * speed
+    const targetVy = wy * speed
     p.vx += (targetVx - p.vx) * Math.min(1, dt * 12)
     p.vy += (targetVy - p.vy) * Math.min(1, dt * 12)
 
@@ -484,7 +623,7 @@ export class Game {
     this.collectCoins()
 
     if (p.moving) {
-      p.facing = Math.atan2(axis.y, axis.x)
+      p.facing = Math.atan2(wy, wx)
       p.anim += dt * (p.running ? 14 : 9)
     }
 
@@ -509,6 +648,9 @@ export class Game {
       this.saveMeta()
       return
     }
+
+    // the street camera eases toward wherever it has been aimed
+    this.easeLook(dt)
 
     // climb cooldown
     if (this.climbCooldown > 0) this.climbCooldown -= dt
@@ -549,14 +691,54 @@ export class Game {
     }
   }
 
-  private moveWithCollision(p: PlayerState, dt: number) {
-    const solid = (x: number, y: number): boolean => {
-      const tx = Math.floor(x / TS)
-      const ty = Math.floor(y / TS)
-      if (tx < 0 || ty < 0 || tx >= this.world.w || ty >= this.world.h) return true
-      const t = this.world.tiles[ty * this.world.w + tx]
-      return t === 'building' || t === 'water' || t === 'wall' || (t === 'gate' && !p.hasPass)
+  /** the runner is a body, not a point: this is how far their edge reaches */
+  private static readonly BODY_R = 9
+
+  /**
+   * Is one tile blocking for the runner? Buildings, water, the map edge and the
+   * locked gate all hold. The one exception is a block that offers something to
+   * interact with (a shop, a bar, a house with food or water): you are meant to
+   * step up to those. Everything else keeps its border.
+   */
+  private tileSolid(tx: number, ty: number, hasPass: boolean): boolean {
+    if (tx < 0 || ty < 0 || tx >= this.world.w || ty >= this.world.h) return true
+    const t = this.world.tiles[ty * this.world.w + tx]
+    if (t === 'water' || t === 'wall') return true
+    if (t === 'gate') return !hasPass
+    if (t !== 'building') return false
+    return !this.tileHasInteractable(tx, ty)
+  }
+
+  /** does this tile carry a prop the player is meant to walk up to? */
+  private tileHasInteractable(tx: number, ty: number): boolean {
+    const cx = tx * TS + TS / 2
+    const cy = ty * TS + TS / 2
+    for (const pr of this.world.props) {
+      if (pr.used) continue
+      if (Math.abs(pr.x - cx) > TS / 2 || Math.abs(pr.y - cy) > TS / 2) continue
+      if (pr.kind === 'shop' || pr.kind === 'house' || pr.kind === 'bar') return true
+      if (pr.data === 'food' || pr.data === 'water') return true
     }
+    return false
+  }
+
+  /**
+   * Sample the runner's whole footprint, not just their centre, against solid
+   * tiles. Testing only the centre let the sprite slide its shoulders into a
+   * block and read as though it had climbed the wall; ringing the body around
+   * the centre keeps the border honest while still fitting through one tile gaps.
+   */
+  private bodyBlocked(x: number, y: number, hasPass: boolean): boolean {
+    const r = Game.BODY_R
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2
+      if (this.tileSolid(Math.floor((x + Math.cos(a) * r) / TS), Math.floor((y + Math.sin(a) * r) / TS), hasPass))
+        return true
+    }
+    return this.tileSolid(Math.floor(x / TS), Math.floor(y / TS), hasPass)
+  }
+
+  private moveWithCollision(p: PlayerState, dt: number) {
     const propBlock = (x: number, y: number): boolean => {
       for (const pr of this.world.props) {
         if (!pr.blocking || pr.used) continue
@@ -565,12 +747,13 @@ export class Game {
       }
       return false
     }
+    const blocked = (x: number, y: number) => this.bodyBlocked(x, y, p.hasPass) || propBlock(x, y)
 
     const nx = p.x + p.vx * dt
-    if (!solid(nx, p.y) && !propBlock(nx, p.y)) p.x = nx
+    if (!blocked(nx, p.y)) p.x = nx
     else p.vx = 0
     const ny = p.y + p.vy * dt
-    if (!solid(p.x, ny) && !propBlock(p.x, ny)) p.y = ny
+    if (!blocked(p.x, ny)) p.y = ny
     else p.vy = 0
 
     // gate tile lets you walk only rightward at the right edge
@@ -1159,10 +1342,9 @@ export class Game {
     const diry = Math.sin(this.player.facing)
     const overX = this.player.x + dirx * 30
     const overY = this.player.y + diry * 30
-    const tx = Math.floor(overX / TS)
-    const ty = Math.floor(overY / TS)
-    const t = tx >= 0 && ty >= 0 && tx < this.world.w && ty < this.world.h ? this.world.tiles[ty * this.world.w + tx] : 'building'
-    if (t === 'building' || t === 'water' || t === 'wall') {
+    // the vault must land the whole body on open ground, never on or over a
+    // building border — a climb is a hop along the street, not onto a roof
+    if (this.bodyBlocked(overX, overY, this.player.hasPass)) {
       this.toast("Can't climb in that direction.", 'info')
       return
     }
@@ -1265,6 +1447,9 @@ export class Game {
     this.player.x = this.world.spawn.x * TS
     this.player.y = this.world.spawn.y * TS
     this.player.hidden = false
+    this.player.facing = 0
+    this.camYaw = 0
+    this.yawTarget = 0
     for (const gd of this.world.guards) {
       gd.state = 'patrol'
       gd.alert = 0
@@ -1282,6 +1467,8 @@ export class Game {
     // a death restarts the level, so its stopwatch starts over too
     this.cityTimeSec = 0
     this.player = this.makePlayer()
+    this.camYaw = this.player.facing
+    this.yawTarget = this.player.facing
     for (const gd of this.world.guards) {
       gd.state = 'patrol'
       gd.alert = 0
@@ -1341,6 +1528,15 @@ export class Game {
     this.daysInCity = 1
     this.timeSec = 0
     this.status = 'playing'
+    // The camera crosses the border too, and whatever heading the runner left
+    // the last city with would open this one staring sideways at the border.
+    // Snapping it to the entry heading (east, down the road into town) means the
+    // first frame of a new city is always the road ahead.
+    this.camYaw = this.player.facing
+    this.yawTarget = this.player.facing
+    this.camPitch = 0
+    this.pitchTarget = 0
+    this.lookHold = 0
     this.saveAccum = 0
     this.checkpoint()
     this.toast(
@@ -1397,6 +1593,8 @@ export class Game {
       toasts: [...this.toasts],
       caughtTimer: this.caughtTimer,
       deathReason: this.deathReason,
+      camera: this.cameraMode,
+      look: this.lookMode,
       daysInCity: this.daysInCity,
       deaths: this.deaths,
       totalDays: this.totalDays,

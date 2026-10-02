@@ -53,8 +53,37 @@ export interface ProfileStats {
   timePlayedSec: number
 }
 
+export type CameraMode = 'top' | 'walk'
+
 export interface ProfileSettings {
   sound: boolean
+  /**
+   * Which camera the run opens with: `top` is the raised map view the game has
+   * always used, `walk` is the eye level street camera. Cosmetic on purpose, so
+   * it is deliberately left OUT of the integrity fingerprint: switching view
+   * must never cost a player their save.
+   */
+  camera: CameraMode
+  /**
+   * How the mouse turns the street camera: `drag` holds the right button and
+   * sweeps, `free` follows every mouse move with no button at all, `off` leaves
+   * looking to touch and the keyboard. Cosmetic on purpose, so like the camera
+   * choice it is deliberately left OUT of the integrity fingerprint: changing
+   * how you look must never cost a player their save.
+   */
+  look: LookMode
+}
+
+export type LookMode = 'drag' | 'free' | 'off'
+
+/** coerce anything into a valid camera mode, defaulting to the map view */
+export function cleanCamera(v: unknown): CameraMode {
+  return v === 'walk' ? 'walk' : 'top'
+}
+
+/** coerce anything into a valid look mode, defaulting to the right button drag */
+export function cleanLook(v: unknown): LookMode {
+  return v === 'free' ? 'free' : v === 'off' ? 'off' : 'drag'
 }
 
 export interface Profile {
@@ -160,7 +189,7 @@ export function freshProfile(name = 'Runner', skin = DEFAULT_SKIN_ID): Profile {
     bestCity: 1,
     run: null,
     stats: { attempts: 0, solves: 0, deaths: 0, citiesCleared: 0, timePlayedSec: 0 },
-    settings: { sound: true },
+    settings: { sound: true, camera: 'top', look: 'drag' },
     lore: {},
     onboarded: false,
     tutorialSeen: false,
@@ -231,7 +260,11 @@ function normalize(p: Profile): Profile {
     citiesCleared: int(p.stats.citiesCleared, 0, 1e7, 0),
     timePlayedSec: Math.max(0, Number.isFinite(p.stats.timePlayedSec) ? p.stats.timePlayedSec : 0),
   }
-  p.settings = { sound: p.settings.sound !== false }
+  p.settings = {
+    sound: p.settings.sound !== false,
+    camera: cleanCamera(p.settings.camera),
+    look: cleanLook(p.settings.look),
+  }
   p.lore = cleanLore(p.lore)
   p.onboarded = p.onboarded === true
   p.tutorialSeen = p.tutorialSeen === true
@@ -310,7 +343,11 @@ function sanitize(raw: unknown): Profile | null {
       citiesCleared: clampNum(stats.citiesCleared, 0, 1e7, 0),
       timePlayedSec: clampNum(stats.timePlayedSec, 0, 1e9, 0),
     },
-    settings: { sound: settings.sound !== false },
+    settings: {
+      sound: settings.sound !== false,
+      camera: cleanCamera(settings.camera),
+      look: cleanLook(settings.look),
+    },
     lore,
     onboarded: d.onboarded === true,
     tutorialSeen,

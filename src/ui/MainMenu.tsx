@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { BRAND } from '../game/brand'
 import { REGIONS, regionIndexForCity } from '../game/city'
-import type { Profile } from '../game/profile'
+import type { CameraMode, Profile } from '../game/profile'
 import { fmtClock, loadRecords } from '../game/records'
 import { SkinPreview } from './Onboarding'
 
@@ -18,6 +18,8 @@ interface MainMenuProps {
   onSettings: () => void
   onHowToPlay: () => void
   onRanking: () => void
+  /** choose the camera the run opens with, straight from the menu */
+  onChangeCamera: (camera: CameraMode) => void
 }
 
 /**
@@ -36,6 +38,7 @@ export function MainMenu({
   onSettings,
   onHowToPlay,
   onRanking,
+  onChangeCamera,
 }: MainMenuProps) {
   // read once per mount: this screen is remounted every time it is shown, so the
   // board is always fresh when the player returns from a run
@@ -64,6 +67,23 @@ export function MainMenu({
         </p>
 
         <div className="panel menu-panel">
+          <div className="cam-picker menu-cam">
+            <button
+              className={profile.settings.camera === 'top' ? 'cam-option active' : 'cam-option'}
+              onClick={() => onChangeCamera('top')}
+            >
+              <strong>Map view</strong>
+              <span>Look down on the whole block</span>
+            </button>
+            <button
+              className={profile.settings.camera === 'walk' ? 'cam-option active' : 'cam-option'}
+              onClick={() => onChangeCamera('walk')}
+            >
+              <strong>Street view</strong>
+              <span>Walk the city at eye level</span>
+            </button>
+          </div>
+
           <div className="menu-stack">
             <button className="primary wide" onClick={onPlay}>
               {run ? 'Continue' : 'Play'}
