@@ -116,15 +116,15 @@ export function Settings({
               className={profile.settings.look === 'drag' ? 'cam-option active' : 'cam-option'}
               onClick={() => onChangeLook('drag')}
             >
-              <strong>Right button drag</strong>
-              <span>Hold the right button and sweep to look around</span>
+              <strong>Left button drag</strong>
+              <span>Hold the left button and sweep to look around</span>
             </button>
             <button
               className={profile.settings.look === 'free' ? 'cam-option active' : 'cam-option'}
               onClick={() => onChangeLook('free')}
             >
               <strong>Free look</strong>
-              <span>Click the street once to take the mouse, then look by moving it. Escape lets go</span>
+              <span>Right-click the street to take the mouse, then look by moving it. Escape lets go</span>
             </button>
             <button
               className={profile.settings.look === 'off' ? 'cam-option active' : 'cam-option'}

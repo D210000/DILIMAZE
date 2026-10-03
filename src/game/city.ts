@@ -117,56 +117,56 @@ export const ARCHETYPES: Archetype[] = [
     id: 'metro',
     name: 'Neon Metro',
     blurb: 'dense blocks, lit glass, a corner on every street',
-    build: 0.86,
-    height: 1,
+    build: 0.88,
+    height: 1.18,
     trees: 1,
-    palette: { grass: '#2b2a4e', road: '#4a5488', building: '#6a52b4', buildingAlt: '#413f7e' },
+    palette: { grass: '#17192f', road: '#39436e', building: '#68428f', buildingAlt: '#302b5d' },
     neon: { accent: '#ff4fb0', neon: '#ff5cc0', neon2: '#4fe4ff' },
-    blend: 0.35,
+    blend: 0.88,
   },
   {
     id: 'village',
     name: 'Timber Village',
     blurb: 'low cottages, fences, dirt lanes and a lot of open ground',
-    build: 0.6,
-    height: 0.6,
-    trees: 1.5,
-    palette: { grass: '#3d5433', road: '#8a7550', building: '#b5865c', buildingAlt: '#7d5c3c' },
+    build: 0.55,
+    height: 0.48,
+    trees: 1.8,
+    palette: { grass: '#3c5735', road: '#826744', building: '#bd9861', buildingAlt: '#73543b' },
     neon: { accent: '#ffb45c', neon: '#ffc46a', neon2: '#ff8f5c' },
-    blend: 0.62,
+    blend: 0.9,
   },
   {
     id: 'forest',
     name: 'Forest Clearings',
     blurb: 'deep cover, dirt tracks, very few walls to hide behind',
-    build: 0.42,
-    height: 0.72,
-    trees: 3.4,
-    palette: { grass: '#20512f', road: '#4f6b45', building: '#4a7a52', buildingAlt: '#2f5c3a' },
+    build: 0.3,
+    height: 0.58,
+    trees: 4.8,
+    palette: { grass: '#153e2b', road: '#48603b', building: '#416d49', buildingAlt: '#294c34' },
     neon: { accent: '#7dff9a', neon: '#6cff8c', neon2: '#d9ff6a' },
-    blend: 0.68,
+    blend: 0.94,
   },
   {
     id: 'future',
     name: 'Future City',
     blurb: 'glass towers, wide plazas and paper white light',
-    build: 0.9,
-    height: 1.5,
-    trees: 0.5,
-    palette: { grass: '#1e3a52', road: '#5d86a8', building: '#a9dcef', buildingAlt: '#5b87a6' },
+    build: 0.72,
+    height: 1.8,
+    trees: 0.35,
+    palette: { grass: '#15323d', road: '#456978', building: '#81c0cb', buildingAlt: '#315a72' },
     neon: { accent: '#66f0ff', neon: '#7cf6ff', neon2: '#b98cff' },
-    blend: 0.6,
+    blend: 0.94,
   },
   {
     id: 'ruins',
     name: 'Rubble District',
     blurb: 'half the city is down, the other half is being emptied',
-    build: 0.54,
-    height: 0.8,
-    trees: 1.1,
-    palette: { grass: '#4a4438', road: '#8b8272', building: '#8f8574', buildingAlt: '#5c564a' },
+    build: 0.48,
+    height: 0.76,
+    trees: 0.9,
+    palette: { grass: '#3c302b', road: '#70645a', building: '#82705a', buildingAlt: '#4d4038' },
     neon: { accent: '#ff8f5c', neon: '#ffa06a', neon2: '#ffd24a' },
-    blend: 0.66,
+    blend: 0.92,
   },
 ]
 
@@ -612,10 +612,14 @@ function guardSpec(city: number): { n: number; dist: number; half: number; speed
  */
 const EARLY_ROLES: GuardRole[] = ['beat', 'wide', 'long', 'beat']
 const FULL_ROLES: GuardRole[] = ['beat', 'wide', 'long', 'gun', 'beat', 'long', 'gun', 'wide']
+const ELITE_ROLES: GuardRole[] = [
+  'beat', 'wide', 'long', 'gun', 'tracker', 'charger', 'beat', 'long', 'gun', 'tracker', 'wide', 'charger',
+]
 
 export function guardRoleFor(city: number, index: number): GuardRole {
   if (city < 6) return 'beat'
   if (city < 11) return EARLY_ROLES[(index + city) % EARLY_ROLES.length]
+  if (city >= 21) return ELITE_ROLES[(index + city) % ELITE_ROLES.length]
   return FULL_ROLES[(index + city) % FULL_ROLES.length]
 }
 
@@ -625,6 +629,8 @@ const ROLE_TRAITS: Record<GuardRole, { dist: number; half: number; speed: number
   long: { dist: 1.5, half: 0.72, speed: 0.92 },
   wide: { dist: 0.8, half: 1.6, speed: 0.96 },
   gun: { dist: 1.25, half: 0.9, speed: 0.95 },
+  charger: { dist: 0.92, half: 0.88, speed: 1.02 },
+  tracker: { dist: 1.15, half: 0.9, speed: 0.94 },
 }
 
 /*
@@ -779,9 +785,32 @@ export function generateCity(city: number, opts: { skipSolvabilityGuard?: boolea
   const type = archetypeForCity(city)
   const openChance = Math.min(0.8, Math.max(0.12, 1 - type.build))
   const parkShare = Math.min(0.85, 0.35 + (type.trees - 1) * 0.22)
+  const plazaCellCenter = (point: number, roads: number[], max: number) => {
+    let left = 2
+    let right = max - 3
+    for (const road of roads) {
+      if (road < point) left = road + 3
+      else {
+        right = road - 3
+        break
+      }
+    }
+    return (left + right) / 2
+  }
   for (let y = 1; y < h - 1; y++)
     for (let x = 1; x < w - 1; x++) {
       if (tiles[idx(x, y)] !== 'grass') continue
+      // Future districts reserve a small civic court in the middle of each
+      // superblock. This creates broad, walkable plaza shapes instead of a
+      // random checkerboard of isolated open tiles between the towers.
+      if (
+        type.id === 'future' &&
+        Math.abs(x - plazaCellCenter(x, vRoads, w)) <= 1 &&
+        Math.abs(y - plazaCellCenter(y, hRoads, h)) <= 1
+      ) {
+        tiles[idx(x, y)] = 'plaza'
+        continue
+      }
       if (rng.chance(openChance)) {
         tiles[idx(x, y)] = rng.chance(parkShare) ? 'park' : 'plaza'
         continue
@@ -1026,6 +1055,21 @@ export function generateCity(city: number, opts: { skipSolvabilityGuard?: boolea
           best = { x, y }
         }
       }
+    // A sparse archetype can have every central plaza claimed by furniture.
+    // Search the whole walkable city for the same landmark conditions before
+    // falling back to a generic free tile, so the guaranteed fountain still
+    // has its intended block-or-tree setting.
+    if (!best) {
+      for (let y = 1; y < h - 1; y++)
+        for (let x = 1; x < w - 1; x++) {
+          if (!walkable(getTile(x, y)) || occupancy[idx(x, y)] || !fountainSpotOk(x, y)) continue
+          const d = Math.abs(x - mx) + Math.abs(y - my)
+          if (d < bestD) {
+            bestD = d
+            best = { x, y }
+          }
+        }
+    }
     const spot = best ?? freeSpotNear(mx, my) ?? { x: 2, y: 2 }
     addProp('fountain', spot.x, spot.y)
   }
@@ -1221,6 +1265,9 @@ export function generateCity(city: number, opts: { skipSolvabilityGuard?: boolea
         const y = Math.floor(ay + (by - ay) * t + 0.5)
         if (x < 0 || y < 0 || x >= w || y >= h) return false
         if (!walkable(getTile(x, y))) return false
+        const px = (ax + (bx - ax) * t) * TS
+        const py = (ay + (by - ay) * t) * TS
+        if (props.some((p) => p.blocking && !p.used && Math.abs(p.x - px) < 17 && Math.abs(p.y - py) < 17)) return false
       }
       return true
     }
@@ -1237,6 +1284,18 @@ export function generateCity(city: number, opts: { skipSolvabilityGuard?: boolea
         cy = near.y
       }
     }
+    const guardCanStand = (x: number, y: number) =>
+      walkable(getTile(x, y)) &&
+      !props.some((p) => p.blocking && !p.used && Math.abs(p.x - (x + 0.5) * TS) < 17 && Math.abs(p.y - (y + 0.5) * TS) < 17)
+    if (!guardCanStand(cx, cy)) {
+      let nearest: { x: number; y: number; d: number } | null = null
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        if (!guardCanStand(x, y)) continue
+        const d = (x - cx) ** 2 + (y - cy) ** 2
+        if (!nearest || d < nearest.d) nearest = { x, y, d }
+      }
+      if (nearest) { cx = nearest.x; cy = nearest.y }
+    }
     const nodes = rng.int(3, 5)
     for (let k = 0; k < nodes; k++) {
       // hop to a nearby road tile whose whole leg stays clear of buildings
@@ -1245,6 +1304,7 @@ export function generateCity(city: number, opts: { skipSolvabilityGuard?: boolea
         const ny = cy + rng.int(-6, 6)
         if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
         if (!walkable(getTile(nx, ny))) continue
+        if (!guardCanStand(nx, ny)) continue
         if (!legClear(cx, cy, nx, ny)) continue
         path.push({ x: nx + 0.5, y: ny + 0.5 })
         cx = nx
@@ -1260,8 +1320,9 @@ export function generateCity(city: number, opts: { skipSolvabilityGuard?: boolea
       const speed = Math.min(4.9, spec.speed * traits.speed * (captain ? 1.12 : 1))
       guards.push({
       id: i,
-      x: path[0].x,
-      y: path[0].y,
+      // Patrol nodes are stored in tile units; live guard coordinates are pixels.
+      x: path[0].x * TS,
+      y: path[0].y * TS,
       path,
       wp: 1 % path.length,
       speed,
@@ -1273,10 +1334,15 @@ export function generateCity(city: number, opts: { skipSolvabilityGuard?: boolea
       visionDist: Math.min(13 * TS, spec.dist * traits.dist * TS * (captain ? 1.08 : 1)),
       visionHalfAngle: Math.min(1.1, spec.half * traits.half * (captain ? 1.06 : 1)),
       stuckTimer: 0,
+      detourPath: [],
+      detourWp: 0,
+      detourTarget: null,
       tier,
       role,
       captain,
       attackCd: 0,
+      abilityCd: rng.float(0.5, 2.5),
+      burstTimer: 0,
       flash: 0,
       shotAt: null,
     })
@@ -1306,7 +1372,7 @@ export function generateCity(city: number, opts: { skipSolvabilityGuard?: boolea
               const t2 = getTile(nx, ny)
               if (wantPlaza ? t2 !== 'plaza' : !walkable(t2)) continue
               if (occupancy[ny * w + nx]) continue
-              if (fountainCrowded(nx, ny, f.id)) continue
+              if (fountainCrowded(nx, ny, f.id) || (!besideBlock(nx, ny) && !treeNear(nx, ny))) continue
               occupancy[ty * w + tx] = 0
               f.x = (nx + 0.5) * TS
               f.y = (ny + 0.5) * TS

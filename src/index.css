@@ -1715,7 +1715,9 @@ button.wide {
   }
 }
 
-@media (hover: hover) and (pointer: fine) {
+/* A narrow desktop/browser viewport still needs a visible way to move: hide
+   touch controls only when there is room for the full desktop layout. */
+@media (hover: hover) and (pointer: fine) and (min-width: 701px) {
   .touch {
     display: none;
   }
@@ -1733,18 +1735,211 @@ button.wide {
 /* ---------- the city type line under the city name ---------- */
 
 .hud-type {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  border: 1px solid rgba(79, 232, 255, 0.42);
+  border-radius: 999px;
+  background: rgba(18, 16, 47, 0.72);
   font-family: var(--font-display);
   font-size: 12.5px;
-  letter-spacing: 2.5px;
-  color: var(--cyan);
+  letter-spacing: 1.6px;
+  color: #70edff;
   margin-top: 1px;
   text-shadow: 0 0 10px rgba(40, 230, 255, 0.45);
+}
+
+.hud-type-mark {
+  color: currentColor;
+  font-size: 8px;
+}
+
+.hud-type[data-archetype='Timber Village'] {
+  color: #ffd58b;
+  border-color: rgba(255, 190, 102, 0.48);
+}
+
+.hud-type[data-archetype='Forest Clearings'] {
+  color: #9effa6;
+  border-color: rgba(126, 247, 168, 0.5);
+}
+
+.hud-type[data-archetype='Future City'] {
+  color: #a8fbff;
+  border-color: rgba(117, 244, 255, 0.62);
+  box-shadow: inset 0 0 12px rgba(79, 232, 255, 0.14);
+}
+
+.hud-type[data-archetype='Rubble District'] {
+  color: #ffae78;
+  border-color: rgba(255, 143, 92, 0.54);
 }
 
 /* under fire badge reads louder than the chase badge it sits under */
 .alert-badge.under-fire {
   color: var(--warn);
   animation-duration: 0.45s;
+}
+
+/* ---------- input clarity and compact-screen comfort ---------- */
+
+button:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 3px;
+  box-shadow: 0 0 18px rgba(79, 232, 255, 0.32);
+}
+
+.joy-pad {
+  width: clamp(112px, 16vw, 142px);
+  height: clamp(112px, 16vw, 142px);
+  bottom: max(28px, env(safe-area-inset-bottom) + 18px);
+  background: radial-gradient(circle, rgba(79, 232, 255, 0.13) 0 26%, rgba(79, 232, 255, 0.06) 27% 64%, rgba(255, 79, 176, 0.1) 65% 100%);
+  border: 1px solid rgba(79, 232, 255, 0.48);
+  box-shadow: inset 0 0 22px rgba(79, 232, 255, 0.1), 0 6px 26px rgba(8, 5, 25, 0.3);
+  touch-action: none;
+}
+
+.joy-knob {
+  width: 54px;
+  height: 54px;
+  margin: -27px 0 0 -27px;
+  background: linear-gradient(145deg, rgba(255, 79, 176, 0.72), rgba(133, 34, 121, 0.82));
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  box-shadow: 0 0 20px rgba(255, 79, 176, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  will-change: transform;
+}
+
+.touch-btns {
+  right: max(16px, env(safe-area-inset-right) + 12px);
+  bottom: max(24px, env(safe-area-inset-bottom) + 16px);
+  grid-template-columns: repeat(3, minmax(58px, 68px));
+  gap: 8px;
+}
+
+.touch-btns button.touch-action {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  width: 100%;
+  min-width: 58px;
+  min-height: 58px;
+  height: auto;
+  aspect-ratio: 1;
+  border-radius: 18px;
+  padding: 4px 2px;
+  background: linear-gradient(155deg, rgba(31, 23, 67, 0.93), rgba(12, 9, 29, 0.94));
+  border: 1px solid rgba(79, 232, 255, 0.46);
+  box-shadow: 0 5px 16px rgba(6, 3, 18, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  color: #fff;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.touch-btns button.touch-action:active {
+  transform: scale(0.94);
+  background: linear-gradient(155deg, rgba(90, 48, 123, 0.98), rgba(33, 18, 63, 0.98));
+}
+
+.touch-action span {
+  font-family: var(--font-display);
+  font-size: 20px;
+  line-height: 1.05;
+  color: var(--cyan);
+}
+
+.touch-action small {
+  font-family: var(--font-display);
+  font-size: 8px;
+  line-height: 1.1;
+  letter-spacing: 0.7px;
+  color: rgba(245, 240, 255, 0.86);
+}
+
+.touch-btns button.touch-primary {
+  background: linear-gradient(155deg, rgba(255, 79, 176, 0.94), rgba(113, 24, 105, 0.96));
+  border-color: rgba(255, 210, 238, 0.85);
+  box-shadow: 0 0 18px rgba(255, 79, 176, 0.32), 0 5px 16px rgba(6, 3, 18, 0.42);
+}
+
+.touch-primary span,
+.touch-primary small {
+  color: #fff;
+}
+
+@media (max-width: 700px) {
+  .hud-top-left {
+    max-width: calc(100vw - 180px);
+    padding: 6px 8px;
+    background: linear-gradient(120deg, rgba(14, 9, 34, 0.82), rgba(14, 9, 34, 0.54));
+  }
+
+  .hud-top-right {
+    padding: 7px 8px;
+    border-radius: 10px;
+    background: rgba(14, 9, 34, 0.68);
+    backdrop-filter: blur(3px);
+  }
+
+  .hud-bottom-left {
+    max-width: min(58vw, 440px);
+    background: rgba(12, 8, 30, 0.7);
+    backdrop-filter: blur(4px);
+  }
+
+  .clue-peek,
+  .clue-detail {
+    max-width: min(54vw, 390px);
+  }
+
+  .prompt {
+    bottom: max(172px, env(safe-area-inset-bottom) + 156px);
+    max-width: min(54vw, 400px);
+    white-space: normal;
+    text-align: center;
+  }
+}
+
+@media (max-height: 480px) and (orientation: landscape) {
+  .joy-pad {
+    width: 100px;
+    height: 100px;
+    bottom: max(12px, env(safe-area-inset-bottom) + 8px);
+  }
+
+  .touch-btns {
+    grid-template-columns: repeat(3, 52px);
+    gap: 5px;
+    bottom: max(8px, env(safe-area-inset-bottom) + 4px);
+  }
+
+  .touch-btns button.touch-action {
+    min-width: 52px;
+    min-height: 52px;
+    border-radius: 14px;
+  }
+
+  .touch-action span {
+    font-size: 17px;
+  }
+
+  .touch-action small {
+    font-size: 7px;
+  }
+
+  .hud-type {
+    display: none;
+  }
+
+  .hud-top-left,
+  .hud-top-right {
+    top: max(5px, env(safe-area-inset-top));
+  }
+
+  .prompt {
+    bottom: 78px;
+  }
 }
 
 /* ---------- first time tutorial ---------- */

@@ -12,7 +12,7 @@ import { cleanLook, saveProfile, type CameraMode, type LookMode, type Profile, t
 import { recordCityTime, recordRun } from './records'
 import { RNG } from './rng'
 import { sfx } from './sound'
-import type { CharacterPose, Guard, PlayerState, Prop, Puzzle, TileKind, Toast, World } from './types'
+import type { CharacterPose, Guard, PlayerState, Prop, Puzzle, TileKind, Toast, Vec, World } from './types'
 
 export interface DialogData {
   title: string
@@ -52,7 +52,7 @@ export interface Snapshot {
   deathReason: string
   /** which camera the run is using: the raised map or the eye level street cam */
   camera: CameraMode
-  /** how the mouse turns the street camera: right drag, free look, or neither */
+  /** how the mouse turns the street camera: left drag, free look, or neither */
   look: LookMode
   daysInCity: number
   deaths: number
@@ -117,6 +117,23 @@ export const DAY_START_HOUR = 6
 export const MAX_DARKNESS = 0.5
 
 /**
+ * How far the street camera turns (yaw) per pixel of pointer travel. A dial
+ * that is easy to overshoot makes the whole street view feel twitchy, so this
+ * is deliberately gentle: a full sweep across a laptop trackpad is a modest
+ * turn, not a spin.
+ */
+export const LOOK_YAW_PER_PX = 0.0024
+/** how far the street camera tilts (pitch) per pixel of pointer travel */
+export const LOOK_PITCH_PER_PX = 0.0016
+
+/**
+ * Free look follows every pointer move with no button to hold, so the same
+ * pixel travel reads faster than a deliberate left button drag. Scaling it
+ * down a touch keeps simply hovering the mouse from whipping the view round.
+ */
+export const LOOK_FREE_SCALE = 0.7
+
+/**
  * The single source of truth for how light it is. render.ts paints from
  * `darkness`; guards sharpen their senses from `night`. Keeping both in one
  * function means the picture and the stealth rules can never disagree.
@@ -138,6 +155,16 @@ function approachAngle(a: number, b: number, t: number): number {
   while (d > Math.PI) d -= Math.PI * 2
   while (d < -Math.PI) d += Math.PI * 2
   return a + d * Math.min(1, Math.max(0, t))
+}
+
+/**
+ * The runner's right hand in the street view, in world axes: the camera's
+ * forward (cos yaw, sin yaw) turned a quarter turn clockwise as seen from
+ * above. The walk mapping and the street renderer both read this one function,
+ * so stepping right and the camera's right edge can never disagree.
+ */
+export function streetRight(yaw: number): { x: number; y: number } {
+  return { x: -Math.sin(yaw), y: Math.cos(yaw) }
 }
 
 /** clock hour (0 to 23) for a day fraction, so the HUD agrees with the light */
@@ -235,7 +262,7 @@ export class Game {
    * the street view walks relative to it, so W always heads into the screen.
    */
   camYaw = 0
-  /** look up or down a little, in the street view (right button drag / touch) */
+  /** look up or down a little, in the street view (mouse drag / touch) */
   camPitch = 0
   /** where the street camera is aiming; camYaw and camPitch ease toward it */
   private yawTarget = 0
@@ -302,7 +329,7 @@ export class Game {
   }
 
   /**
-   * Choose how the mouse looks around: hold the right button and sweep, follow
+   * Choose how the mouse looks around: hold the left button and sweep, follow
    * the mouse freely with no button at all, or leave looking to touch and the
    * keyboard. Written straight through to the profile so it is remembered, and
    * kept out of the save fingerprint so it can never cost anyone a run.
@@ -330,10 +357,11 @@ export class Game {
     // a fast flick really does arrive as one big jump, so the cap is generous: it
     // only exists to stop a wild event (a tab switch, a stray pointer jump) from
     // snapping the view round
-    const cx = Math.max(-120, Math.min(120, dx))
-    const cy = Math.max(-120, Math.min(120, dy))
-    this.yawTarget += cx * 0.0048
-    this.pitchTarget = Math.max(-0.45, Math.min(0.45, this.pitchTarget + cy * 0.0032))
+    const scale = this.lookMode === 'free' ? LOOK_FREE_SCALE : 1
+    const cx = Math.max(-120, Math.min(120, dx * scale))
+    const cy = Math.max(-120, Math.min(120, dy * scale))
+    this.yawTarget += cx * LOOK_YAW_PER_PX
+    this.pitchTarget = Math.max(-0.45, Math.min(0.45, this.pitchTarget + cy * LOOK_PITCH_PER_PX))
     this.lookHold = 1.1
   }
 
@@ -582,10 +610,13 @@ export class Game {
       const strafe = input.x
       const cs = Math.cos(this.camYaw)
       const sn = Math.sin(this.camYaw)
-      // screen right is world (sin, -cos) for a camera looking along (cos, sin),
-      // so A steps left across the view and D steps right
-      wx = cs * fwd + sn * strafe
-      wy = sn * fwd - cs * strafe
+      // The camera looks along (cos, sin). The runner's right hand is that
+      // forward turned a quarter turn clockwise, seen from above, which is the
+      // very vector the street renderer draws with. Sharing it means D always
+      // steps toward the right edge of the view and A toward the left.
+      const right = streetRight(this.camYaw)
+      wx = cs * fwd + right.x * strafe
+      wy = sn * fwd + right.y * strafe
       const wl = Math.hypot(wx, wy)
       if (wl > 1) {
         wx /= wl
@@ -773,11 +804,17 @@ export class Game {
         this.unstickGuard(gd)
         gd.stuckTimer = 0
       }
+      if (!this.guardTileOpen(gd.x, gd.y)) {
+        this.unstickGuard(gd)
+        gd.detourPath = []
+        gd.detourTarget = null
+      }
       const dist = Math.hypot(p.x - gd.x, p.y - gd.y)
       const angleTo = Math.atan2(p.y - gd.y, p.x - gd.x)
       let angDiff = Math.abs(((angleTo - gd.dir + Math.PI * 3) % (Math.PI * 2)) - Math.PI)
+      const trackerPing = gd.role === 'tracker' && p.hidden && dist < 3 * TS && this.lineOfSight(gd.x, gd.y, p.x, p.y)
       const visible =
-        !p.hidden &&
+        (!p.hidden || trackerPing) &&
         dist < gd.visionDist * (night ? 0.6 : 1) &&
         angDiff < gd.visionHalfAngle * (night ? 1.2 : 1) &&
         this.lineOfSight(gd.x, gd.y, p.x, p.y)
@@ -801,6 +838,8 @@ export class Game {
       // further / much wider than a brawler, and close in like everyone else.
       if (gd.flash > 0) gd.flash = Math.max(0, gd.flash - dt)
       if (gd.attackCd > 0) gd.attackCd = Math.max(0, gd.attackCd - dt)
+      if (gd.abilityCd > 0) gd.abilityCd = Math.max(0, gd.abilityCd - dt)
+      if (gd.burstTimer > 0) gd.burstTimer = Math.max(0, gd.burstTimer - dt)
       if (gd.role === 'gun' && gd.alert > 0.4 && visible && gd.attackCd <= 0 && dist > 2.2 * TS) {
         gd.attackCd = Math.max(0.8, 1.95 - gd.tier * 0.12 - this.world.city * 0.004)
         gd.flash = 0.18
@@ -826,28 +865,25 @@ export class Game {
         case 'chase': {
           const tx = gd.lastSeen?.x ?? p.x
           const ty = gd.lastSeen?.y ?? p.y
-          const spd = gd.speed * TS * (night ? 1.1 : 1.0)
+          if (gd.role === 'charger' && gd.burstTimer <= 0 && gd.abilityCd <= 0 && gd.alert > 0.4) {
+            gd.burstTimer = 0.7
+            gd.abilityCd = Math.max(3.2, 5.4 - gd.tier * 0.35 - this.world.city * 0.012)
+          }
+          // Chargers get short pursuit bursts, with a hard cap just below the
+          // runner's sprint so the special still has a reliable counterplay.
+          const speedScale = (night ? 1.1 : 1) * (gd.burstTimer > 0 ? 1.22 : 1)
+          const spd = Math.min(5.5, gd.speed * speedScale) * TS
           const dx = tx - gd.x
           const dy = ty - gd.y
-          const d = Math.hypot(dx, dy) || 1
-          const vx = (dx / d) * spd
-          const vy = (dy / d) * spd
           // a shooter holds its ground in the open and fires instead of closing
           const holding = gd.role === 'gun' && visible && dist < gd.visionDist * 0.92
-          const before = { x: gd.x, y: gd.y }
           if (!holding) {
-            if (!this.guardSolidMove(gd, vx * dt, vy * dt)) {
+            if (!this.moveGuardToward(gd, tx, ty, spd * dt)) {
               gd.stuckTimer += dt
-              if (gd.stuckTimer > 0.8) {
-                // slide around obstacles
-                const s = Math.sign(vy) || 1
-                this.guardSolidMove(gd, 0, s * spd * dt)
-                if (Math.hypot(gd.x - before.x, gd.y - before.y) < 0.5) this.guardSolidMove(gd, s * spd * dt, 0)
-                if (gd.stuckTimer > 4) {
-                  gd.state = 'search'
-                  gd.searchTimer = 2.5
-                  gd.stuckTimer = 0
-                }
+              if (gd.stuckTimer > 4) {
+                gd.state = 'search'
+                gd.searchTimer = 2.5
+                gd.stuckTimer = 0
               }
             } else gd.stuckTimer = 0
           }
@@ -874,7 +910,7 @@ export class Game {
           const dx = target.x * TS - gd.x
           const dy = target.y * TS - gd.y
           const d = Math.hypot(dx, dy) || 1
-          const moved = this.guardSolidMove(gd, (dx / d) * gd.speed * TS * dt, (dy / d) * gd.speed * TS * dt)
+          const moved = this.moveGuardToward(gd, target.x * TS, target.y * TS, gd.speed * TS * dt)
           gd.dir = Math.atan2(dy, dx)
           if (!moved && Math.hypot(dx, dy) > 10) {
             gd.stuckTimer += dt
@@ -899,7 +935,7 @@ export class Game {
         if (d < 10) {
           gd.wp = (gd.wp + 1) % gd.path.length
         } else {
-          const moved = this.guardSolidMove(gd, (dx / d) * gd.speed * TS * 0.6 * dt, (dy / d) * gd.speed * TS * 0.6 * dt)
+          const moved = this.moveGuardToward(gd, target.x * TS, target.y * TS, gd.speed * TS * 0.6 * dt)
           gd.dir = Math.atan2(dy, dx)
           if (!moved) {
             // the straight line to this stop is walled off: skip to the next one
@@ -953,11 +989,125 @@ export class Game {
       }
       return false
     }
-    const nx = gd.x + dx
-    if (!solid(nx, gd.y) && !propBlock(nx, gd.y)) gd.x = nx
-    const ny = gd.y + dy
-    if (!solid(gd.x, ny) && !propBlock(gd.x, ny)) gd.y = ny
-    return Math.hypot(gd.x - before.x, gd.y - before.y) > Math.hypot(dx, dy) * 0.25
+    // Sample the guard's footprint, not just its center. Without this margin a
+    // sprite could drift through a block corner while its center stayed outside.
+    const clear = (x: number, y: number) => {
+      const radius = 8
+      for (const [ox, oy] of [[0, 0], [radius, 0], [-radius, 0], [0, radius], [0, -radius], [radius * 0.7, radius * 0.7], [-radius * 0.7, radius * 0.7], [radius * 0.7, -radius * 0.7], [-radius * 0.7, -radius * 0.7]]) {
+        if (solid(x + ox, y + oy) || propBlock(x + ox, y + oy)) return false
+      }
+      return true
+    }
+    // Small substeps prevent a fast patrol or chase from skipping over a thin
+    // collision edge between frames.
+    const steps = Math.max(1, Math.ceil(Math.hypot(dx, dy) / 4))
+    for (let i = 0; i < steps; i++) {
+      const sx = dx / steps
+      const sy = dy / steps
+      if (clear(gd.x + sx, gd.y)) gd.x += sx
+      if (clear(gd.x, gd.y + sy)) gd.y += sy
+    }
+    return Math.hypot(gd.x - before.x, gd.y - before.y) > 0.01
+  }
+
+  private guardTileOpen(x: number, y: number): boolean {
+    const tx = Math.floor(x / TS)
+    const ty = Math.floor(y / TS)
+    if (tx < 0 || ty < 0 || tx >= this.world.w || ty >= this.world.h) return false
+    const tile = this.world.tiles[ty * this.world.w + tx]
+    return tile === 'road' || tile === 'sidewalk' || tile === 'plaza' || tile === 'park'
+  }
+
+  /** Walk directly where possible; otherwise cache a four-way grid route. */
+  private moveGuardToward(gd: Guard, targetX: number, targetY: number, distance: number): boolean {
+    const targetTile = { x: Math.floor(targetX / TS), y: Math.floor(targetY / TS) }
+    const sameTarget = gd.detourTarget?.x === targetTile.x && gd.detourTarget?.y === targetTile.y
+    if (!sameTarget) {
+      gd.detourPath = []
+      gd.detourWp = 0
+      gd.detourTarget = { x: targetTile.x, y: targetTile.y }
+    }
+    const directDx = targetX - gd.x
+    const directDy = targetY - gd.y
+    const directD = Math.hypot(directDx, directDy)
+    if (directD <= distance + 1) {
+      const moved = this.guardSolidMove(gd, directDx, directDy)
+      if (moved) gd.detourPath = []
+      return moved
+    }
+    if (gd.detourPath.length === 0 || gd.detourWp >= gd.detourPath.length) {
+      gd.detourPath = this.findGuardRoute(gd, targetTile.x, targetTile.y)
+      gd.detourWp = 0
+    }
+    const next = gd.detourPath[gd.detourWp]
+    if (!next) return this.guardSolidMove(gd, (directDx / (directD || 1)) * distance, (directDy / (directD || 1)) * distance)
+    const nx = next.x * TS
+    const ny = next.y * TS
+    const dx = nx - gd.x
+    const dy = ny - gd.y
+    const d = Math.hypot(dx, dy)
+    if (d < 5) {
+      gd.detourWp++
+      return true
+    }
+    const moved = this.guardSolidMove(gd, (dx / d) * Math.min(distance, d), (dy / d) * Math.min(distance, d))
+    if (!moved) {
+      gd.detourPath = []
+      gd.detourWp = 0
+      gd.detourTarget = null
+    }
+    return moved
+  }
+
+  private findGuardRoute(gd: Guard, targetX: number, targetY: number): Vec[] {
+    const w = this.world.w
+    const h = this.world.h
+    const startX = Math.floor(gd.x / TS)
+    const startY = Math.floor(gd.y / TS)
+    const start = startY * w + startX
+    const open = (x: number, y: number) => {
+      if (x < 0 || y < 0 || x >= w || y >= h) return false
+      const tile = this.world.tiles[y * w + x]
+      if (!(tile === 'road' || tile === 'sidewalk' || tile === 'plaza' || tile === 'park')) return false
+      const cx = (x + 0.5) * TS
+      const cy = (y + 0.5) * TS
+      return !this.world.props.some((prop) =>
+        prop.blocking && !prop.used && Math.abs(prop.x - cx) < 17 && Math.abs(prop.y - cy) < 17,
+      )
+    }
+    if (!open(startX, startY)) return []
+    const previous = new Int32Array(w * h).fill(-2)
+    const queue = new Int32Array(w * h)
+    let head = 0
+    let tail = 0
+    queue[tail++] = start
+    previous[start] = -1
+    let found = -1
+    let best = start
+    let bestDistance = Infinity
+    while (head < tail) {
+      const at = queue[head++]
+      const x = at % w
+      const y = Math.floor(at / w)
+      const dTarget = Math.abs(x - targetX) + Math.abs(y - targetY)
+      if (dTarget < bestDistance) { bestDistance = dTarget; best = at }
+      if (x === targetX && y === targetY) { found = at; break }
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = x + dx, ny = y + dy
+        if (!open(nx, ny)) continue
+        const ni = ny * w + nx
+        if (previous[ni] !== -2) continue
+        previous[ni] = at
+        queue[tail++] = ni
+      }
+    }
+    if (found < 0) found = best
+    const route: Vec[] = []
+    for (let at = found; at >= 0 && at !== start; at = previous[at]) {
+      route.push({ x: (at % w) + 0.5, y: (Math.floor(at / w)) + 0.5 })
+    }
+    route.reverse()
+    return route
   }
 
   /**
@@ -971,7 +1121,12 @@ export class Game {
     const blocked = (tx: number, ty: number): boolean => {
       if (tx < 0 || ty < 0 || tx >= this.world.w || ty >= this.world.h) return true
       const t = this.world.tiles[ty * this.world.w + tx]
-      return t === 'building' || t === 'water' || t === 'wall'
+      if (t === 'building' || t === 'water' || t === 'wall') return true
+      const x = (tx + 0.5) * TS
+      const y = (ty + 0.5) * TS
+      return this.world.props.some((prop) =>
+        prop.blocking && !prop.used && Math.abs(prop.x - x) < 17 && Math.abs(prop.y - y) < 17,
+      )
     }
     const gx = Math.floor(gd.x / TS)
     const gy = Math.floor(gd.y / TS)

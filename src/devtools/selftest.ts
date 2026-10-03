@@ -24,7 +24,7 @@ import {
   generateCity,
   mapSize,
 } from '../game/city'
-import { Game, dayHour, dayLight } from '../game/engine'
+import { Game, dayHour, dayLight, streetRight } from '../game/engine'
 import {
   PROFILE_KEY,
   freshProfile,
@@ -561,6 +561,21 @@ function cityTypeTests(s: Suite): void {
   const kinds = new Set(types)
   s.check('every city type in the deck actually gets built', kinds.size >= 5, `${kinds.size} types: ${[...kinds].join(', ')}`)
 
+  const metro = generateCity(1)
+  const forest = generateCity(11)
+  const future = generateCity(16)
+  const countTiles = (world: World, kind: TileKind) => world.tiles.filter((tile) => tile === kind).length
+  s.check(
+    'future districts reserve larger civic plazas than metro blocks',
+    countTiles(future, 'plaza') > countTiles(metro, 'plaza'),
+    `plaza tiles ${countTiles(metro, 'plaza')} → ${countTiles(future, 'plaza')}`,
+  )
+  s.check(
+    'forest clearings generate a broad park canopy',
+    countTiles(forest, 'park') > countTiles(future, 'park'),
+    `park tiles ${countTiles(forest, 'park')} vs ${countTiles(future, 'park')}`,
+  )
+
   // ---- each city gets its own paint on top of the type ----
   let paintOk = true
   let paintDetail = ''
@@ -630,9 +645,15 @@ function cityTypeTests(s: Suite): void {
   const rolesSeen = new Set<string>()
   for (let city = 11; city <= 100; city++) for (const g of generateCity(city).guards) rolesSeen.add(g.role)
   s.check(
-    'all four patrol roles appear across the run',
-    ['beat', 'long', 'wide', 'gun'].every((r) => rolesSeen.has(r)),
+    'all six patrol roles appear across the run',
+    ['beat', 'long', 'wide', 'gun', 'tracker', 'charger'].every((r) => rolesSeen.has(r)),
     [...rolesSeen].sort().join(', '),
+  )
+  s.check(
+    'elite tracker and charger roles unlock from City 21',
+    generateCity(20).guards.every((g) => g.role !== 'tracker' && g.role !== 'charger') &&
+      ['tracker', 'charger'].every((role) => generateCity(60).guards.some((g) => g.role === role)),
+    'standard patrols first, elite abilities in later cities',
   )
 
   // a watcher's cone really is longer / wider than a brawler's (captains excluded,
@@ -650,6 +671,36 @@ function cityTypeTests(s: Suite): void {
     best('wide', 'visionHalfAngle') > best('beat', 'visionHalfAngle'),
     `${best('wide', 'visionHalfAngle').toFixed(2)} vs ${best('beat', 'visionHalfAngle').toFixed(2)} rad`,
   )
+
+  const elites = new Game(60, 0, 0, { profile: freshProfile('Elite checks') })
+  const charger = elites.world.guards.find((g) => g.role === 'charger')
+  if (charger) {
+    elites.world.guards = [charger]
+    charger.abilityCd = 0
+    charger.alert = 0.8
+    charger.state = 'chase'
+    charger.lastSeen = { x: elites.player.x + TS * 2, y: elites.player.y }
+    elites.tick(0.1)
+    s.check('a charger activates its limited pursuit burst', charger.burstTimer > 0, `${charger.burstTimer.toFixed(2)}s burst`)
+  } else {
+    s.check('a charger activates its limited pursuit burst', false, 'no charger in City 60')
+  }
+
+  const trackerGame = new Game(60, 0, 0, { profile: freshProfile('Tracker check') })
+  const tracker = trackerGame.world.guards.find((g) => g.role === 'tracker')
+  if (tracker) {
+    trackerGame.world.guards = [tracker]
+    trackerGame.player.hidden = true
+    tracker.x = trackerGame.player.x + TS * 0.25
+    tracker.y = trackerGame.player.y
+    tracker.dir = Math.PI
+    tracker.alert = 0.35
+    tracker.state = 'patrol'
+    ;(trackerGame as unknown as { updateGuards: (dt: number) => void }).updateGuards(0.2)
+    s.check('a nearby tracker can detect a hidden runner at close range', tracker.alert > 0.35, `alert ${tracker.alert.toFixed(2)}`)
+  } else {
+    s.check('a nearby tracker can detect a hidden runner at close range', false, 'no tracker in City 60')
+  }
 
   // ---- a shooter hurts, and enough rounds put the runner down ----
   if (shooterCity) {
@@ -927,6 +978,53 @@ function guardTests(s: Suite): void {
   }
   s.check('every patrol stop stands on walkable ground', badNode === '', badNode || 'all stops clear')
   s.check('no patrol leg crosses a building', badLeg === '', badLeg || 'all legs open')
+
+  // ---- guards detour around a block instead of pushing into it ----
+  const routing = new Game(4, 0, 0, { profile: freshProfile('Routing') })
+  const routeGuard = routing.world.guards[0]
+  const isOpen = (x: number, y: number) =>
+    x >= 0 && y >= 0 && x < routing.world.w && y < routing.world.h &&
+    isOpenTile(routing.world.tiles[y * routing.world.w + x])
+  let detourTarget: { x: number; y: number } | null = null
+  let detourStart = { x: -1, y: -1 }
+  if (routeGuard) {
+    const sx = Math.floor(routeGuard.x / TS)
+    const sy = Math.floor(routeGuard.y / TS)
+    detourStart = { x: sx, y: sy }
+    for (let ty = 1; ty < routing.world.h - 1 && !detourTarget; ty++) {
+      for (let tx = 1; tx < routing.world.w - 1; tx++) {
+        if (!isOpen(tx, ty) || (tx === sx && ty === sy)) continue
+        const steps = Math.max(1, Math.ceil(Math.hypot(tx - sx, ty - sy) * 2))
+        let crossesBlock = false
+        for (let k = 1; k < steps; k++) {
+          const x = Math.floor(sx + (tx - sx) * k / steps)
+          const y = Math.floor(sy + (ty - sy) * k / steps)
+          if (!isOpen(x, y)) { crossesBlock = true; break }
+        }
+        if (crossesBlock) { detourTarget = { x: tx, y: ty }; break }
+      }
+    }
+  }
+  let detourSucceeded = false
+  let detourDetail = 'no route case found'
+  if (routeGuard && detourTarget) {
+    const move = (routing as unknown as { moveGuardToward: (gd: typeof routeGuard, x: number, y: number, d: number) => boolean }).moveGuardToward
+    const goalX = (detourTarget.x + 0.5) * TS
+    const goalY = (detourTarget.y + 0.5) * TS
+    let stayedOnGround = true
+    let lastDistance = Infinity
+    for (let i = 0; i < 3000; i++) {
+      move.call(routing, routeGuard, goalX, goalY, 4)
+      const gx = Math.floor(routeGuard.x / TS)
+      const gy = Math.floor(routeGuard.y / TS)
+      if (!isOpen(gx, gy)) { stayedOnGround = false; break }
+      lastDistance = Math.hypot(goalX - routeGuard.x, goalY - routeGuard.y)
+      if (lastDistance < 6) break
+    }
+    detourSucceeded = stayedOnGround && lastDistance < 12
+    detourDetail = `start ${detourStart.x},${detourStart.y} → target ${detourTarget.x},${detourTarget.y} · ${Math.round(lastDistance)} px away · ground ${stayedOnGround}`
+  }
+  s.check('a guard routes around a building to reach its target', detourSucceeded, detourSucceeded ? 'detour completed on walkable tiles' : detourDetail)
 
   // ---- a wedged guard frees itself ----
   const stuck = new Game(4, 0, 0, { profile: freshProfile('Wedged') })
@@ -1640,6 +1738,7 @@ function cameraTests(s: Suite): void {
   game.setCameraMode('walk')
   const y0 = game.camYaw
   game.look(120, 0)
+  game.look(120, 0)
   // the turn is eased, so the aim moves at once and the heading follows on tick
   s.check('dragging aims the street camera', Math.abs(game.camYaw - y0) < 0.001, 'heading held until the ease runs')
   for (let i = 0; i < 30; i++) game.tick(1 / 60)
@@ -1651,7 +1750,7 @@ function cameraTests(s: Suite): void {
   // how the mouse looks is a setting like the camera, and it is the view layer
   // that reads it, so the test drives the same field the wiring does
   s.check(
-    'a run opens with the right button drag look',
+    'a run opens with the left button drag look',
     game.lookMode === 'drag' && prof.settings.look === 'drag',
     `look ${game.lookMode}`,
   )
@@ -1659,7 +1758,7 @@ function cameraTests(s: Suite): void {
   s.check('the look choice is written to the profile', prof.settings.look === 'free', `profile ${prof.settings.look}`)
   s.check('the snapshot reports the live look mode', game.getSnapshot().look === 'free')
   game.setLookMode('sideways' as LookMode)
-  s.check('a junk look mode falls back to the right button drag', game.lookMode === 'drag', `look ${game.lookMode}`)
+  s.check('a junk look mode falls back to the left button drag', game.lookMode === 'drag', `look ${game.lookMode}`)
 
   // the look is a drag and nothing else: a pointer that is merely resting, or
   // sitting off centre, must never move the camera on its own
@@ -1693,6 +1792,56 @@ function cameraTests(s: Suite): void {
     Math.abs(game.camYaw - yTurned) <= 0.6,
     `moved ${Math.abs(game.camYaw - yTurned).toFixed(3)}`,
   )
+  // The street view has to satisfy two rules at once: a push to the right turns
+  // the camera to its right, and the strafe keys step along the camera's own
+  // right hand. The engine and the renderer share that one vector, so the way
+  // the runner steps and the way the street is drawn can never drift apart.
+  const dir = new Game(3, 0, 0, { profile: freshProfile('Stepper') })
+  dir.world.guards.length = 0
+  dir.setCameraMode('walk')
+  dir.camYaw = 0
+  const right = streetRight(0)
+  s.check(
+    'the street camera right hand is a quarter turn clockwise from the way it looks',
+    Math.abs(right.x) < 1e-9 && right.y > 0,
+    `right (${right.x.toFixed(2)}, ${right.y.toFixed(2)})`,
+  )
+  dir.setKey('KeyD', true)
+  for (let i = 0; i < 10; i++) dir.tick(1 / 60)
+  s.check(
+    'stepping right moves the runner along the camera right hand',
+    dir.player.vx * right.x + dir.player.vy * right.y > 0.1,
+    `v (${dir.player.vx.toFixed(1)}, ${dir.player.vy.toFixed(1)})`,
+  )
+  dir.setKey('KeyD', false)
+  dir.setKey('KeyW', true)
+  for (let i = 0; i < 10; i++) dir.tick(1 / 60)
+  s.check('pushing forward walks the runner the way the camera looks', dir.player.vx > 0.1, `vx ${dir.player.vx.toFixed(1)}`)
+  dir.setKey('KeyW', false)
+  // a small push must be a small turn: the sensitivity is gentle by design
+  for (let i = 0; i < 60; i++) dir.tick(1 / 60)
+  const yBefore = dir.camYaw
+  dir.look(100, 0)
+  for (let i = 0; i < 120; i++) dir.tick(1 / 60)
+  const turned = dir.camYaw - yBefore
+  s.check(
+    'a rightwards mouse push turns the camera to its right, gently',
+    turned > 0.15 && turned < 0.3,
+    `turned ${turned.toFixed(3)} rad for a 100 px push`,
+  )
+  // free look follows every pointer move, so the same travel reads faster than a
+  // drag and is scaled down a touch: simply hovering must not whip the camera
+  dir.setLookMode('free')
+  const yFree = dir.camYaw
+  dir.look(100, 0)
+  for (let i = 0; i < 120; i++) dir.tick(1 / 60)
+  const freeTurn = dir.camYaw - yFree
+  s.check(
+    'free look turns a little gentler than the left button drag',
+    freeTurn > 0.1 && freeTurn < turned,
+    `free ${freeTurn.toFixed(3)} vs drag ${turned.toFixed(3)}`,
+  )
+
   game.setCameraMode('top')
   const y1 = game.camYaw
   game.look(120, 0)
@@ -1753,12 +1902,15 @@ function cameraTests(s: Suite): void {
       rendered = false
       detail = 'no 2d context'
     } else {
-      game.setCameraMode('walk')
-      for (const t of [0, 0.45, 0.85]) {
-        game.timeSec = game.world.dayLengthSec * t
-        render(ctx, game, 640, 360)
+      for (const city of [1, 6, 11, 16, 36]) {
+        const archetypeGame = new Game(city)
+        archetypeGame.setCameraMode('walk')
+        for (const t of [0, 0.45, 0.85]) {
+          archetypeGame.timeSec = archetypeGame.world.dayLengthSec * t
+          render(ctx, archetypeGame, 640, 360)
+        }
       }
-      detail = 'three frames drawn'
+      detail = 'five archetypes × three light conditions'
     }
   } catch (err) {
     rendered = false

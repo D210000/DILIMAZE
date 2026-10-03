@@ -127,16 +127,16 @@ light comes from the same `dayLight` curve the map view paints from, so the two 
 disagree about the hour: a day opens bright under a blue sky and the orange is saved for a low sun. The avatar is the **same mascot**
 as the map view, just drawn **from behind (no face) while heading away** and from the front only
 when running back at the camera.
-Controls are camera relative here: **W heads into the screen and A / D step sideways**, so the same
+Controls are camera relative here: **W heads into the screen and A / D step sideways** (the right hand the camera draws with is the very direction D steps, so the view never turns backwards), so the same
 keys that walk the map do the obvious thing on foot (the map view still walks the world axes).
 Looking around is a setting, with three choices on the profile (change it any time in Settings):
-**right button drag** is the default, where the view turns by how far the pointer moves while the
-right button is held and stops the moment it is released, so a plain hover, or a cursor left parked
+**left button drag** is the default, where the view turns by how far the pointer moves while the
+left button is held and stops the moment it is released. The turn is gentle by design, so a quick sweep is a small look and never a spin. A plain hover, or a cursor left parked
 by an edge, never takes the camera with it (the browser menu is suppressed on the canvas while the
 street camera is up); **free look** takes the cursor with pointer lock on a click and then follows
 every mouse move with no button at all, with Escape handing the pointer back; and **mouse off**
 leaves the view to touch and the keyboard. A finger drags to look whatever the setting says, since
-a phone has no right button, and the stick lives on its own element so a moving thumb and a looking
+a phone has no mouse button, and the stick lives on its own element so a moving thumb and a looking
 finger work at once.
 Crossing into a new city resets the camera to the entry heading, so a fresh city always opens
 looking down the road into town instead of at the border wall. The whole map is drawn every frame,
@@ -209,7 +209,7 @@ the browser console, or from the preview tooling:
 await window.__dilimaze.runSelfTest()
 ```
 
-152 checks, ~3s, all wired to the real modules (no mocks). It covers:
+157 checks, ~3s, all wired to the real modules (no mocks). It covers:
 
 - **Generation** — all 100 cities: map size matches the curve and grows monotonically, clue count
   matches the ramp, every clue points at a real unique landmark, every riddle/hint is present,
@@ -233,10 +233,10 @@ await window.__dilimaze.runSelfTest()
 - **Camera** — a run opens on the map view, switching to the street camera takes effect on the run
   and is written to the profile, the choice survives a save and load, the snapshot reports the live
   setting, and the perspective renderer draws frames without throwing in daylight, dusk and night.
-  The look mode is checked too (the right button drag is the default, the choice is written to the
+  The look mode is checked too (the left button drag is the default, the choice is written to the
   profile and survives a save, and a junk value falls back to the drag), and the look itself is
   measured: the view holds dead still while no drag is held, a sweep turns it, releasing leaves it
-  where it stopped, and one absurd pointer jump cannot fling it round. A new
+  where it stopped, and one absurd pointer jump cannot fling it round. The walk mapping and the renderer share one right hand, so stepping right and the camera right edge agree, and the turn rate is checked to stay gentle, with free look a touch gentler than the drag so a hover cannot whip the view. A new
   city is checked to open with the camera facing the way in, the runner standing on a road, and the
   road ahead open to the gate.
 - **Carried bars** — crossing a border keeps hunger, thirst and health to the point, while the new
@@ -330,10 +330,10 @@ src/
 - A living street view: a blue day sky and a moving sun and moon over it, taller blocks with window
   grids, real tree billboards, a ring wall round the city, camera relative movement and a back
   facing avatar that is the same character as the map view
-- A look setting with three modes: right button drag (the default), free look that takes the cursor
+- A look setting with three modes: left button drag (the default), free look that takes the cursor
   with pointer lock, or mouse off entirely, all remembered on the profile and kept out of the save
   fingerprint
-- A right button look that behaves: hold and sweep to turn, release and it stays put, a new city
+- A left button look that behaves: hold and sweep to turn, release and it stays put, a gentle turn that never runs backwards, a new city
   always opens facing down the road into town, and the whole map is drawn every frame so the city
   reads complete from any corner
 - A mobile stick that reads like a stick: a dead zone, a pushed thumb rings up to a sprint, and the

@@ -116,7 +116,10 @@ export function TouchControls({ game, snap }: { game: Game; snap: Snapshot }) {
   const playing = snap.status === 'playing'
 
   // fire on pointerdown OR touchstart so rapid taps never get dropped
-  const btn = (action: Parameters<Game['action']>[0]) => ({
+  const btn = (action: Parameters<Game['action']>[0], label: string) => ({
+    type: 'button' as const,
+    'aria-label': label,
+    title: label,
     onPointerDown: (e: React.PointerEvent) => {
       e.preventDefault()
       game.action(action)
@@ -137,13 +140,13 @@ export function TouchControls({ game, snap }: { game: Game; snap: Snapshot }) {
       >
         <div ref={knobRef} className="joy-knob" />
       </div>
-      <div className="touch-btns" style={{ display: playing ? 'grid' : 'none' }}>
-        <button {...btn('interact')}>E</button>
-        <button {...btn('climb')}>↑↑</button>
-        <button {...btn('hide')}>👀</button>
-        <button {...btn('eat')}>🍞</button>
-        <button {...btn('drink')}>💧</button>
-        <button {...btn('sleep')}>🛏</button>
+      <div className="touch-btns" role="group" aria-label="Game controls" style={{ display: playing ? 'grid' : 'none' }}>
+        <button className="touch-action touch-primary" {...btn('interact', 'Interact or talk')}><span aria-hidden="true">E</span><small>ACT</small></button>
+        <button className="touch-action" {...btn('climb', 'Vault over an obstacle')}><span aria-hidden="true">↟</span><small>VAULT</small></button>
+        <button className="touch-action" {...btn('hide', 'Hide or leave hiding')}><span aria-hidden="true">◉</span><small>HIDE</small></button>
+        <button className="touch-action" {...btn('eat', 'Eat food')}><span aria-hidden="true">▰</span><small>EAT</small></button>
+        <button className="touch-action" {...btn('drink', 'Drink water')}><span aria-hidden="true">◒</span><small>DRINK</small></button>
+        <button className="touch-action" {...btn('sleep', 'Sleep near a bench')}><span aria-hidden="true">⌂</span><small>SLEEP</small></button>
       </div>
     </div>
   )

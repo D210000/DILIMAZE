@@ -133,16 +133,16 @@ export default function App() {
 
   /**
    * How the street view looks around, driven by one setting on the profile:
-   *  - `drag` (the default): a mouse holds the RIGHT button and sweeps to turn.
+   *  - `drag` (the default): a mouse holds the LEFT button and sweeps to turn.
    *    Nothing happens on a plain hover, so moving the cursor toward a chip, or
    *    leaving it parked by an edge, can never take the camera with it;
    *  - `free`: the view follows every mouse move with no button at all, and a
-   *    click on the canvas takes the cursor with pointer lock so it cannot leave
+   *    right click on the canvas takes the cursor with pointer lock so it cannot leave
    *    the window mid turn. Escape hands the pointer back for the buttons on
    *    screen, and a browser that refuses the lock still gets the mouse look;
    *  - `off`: the mouse is left alone entirely.
    * A finger drags to look whatever the setting says, because a phone has no
-   * right button; the stick lives on its own element, so a thumb on it and a
+   * mouse button; the stick lives on its own element, so a thumb on it and a
    * finger turning the view work at the same time. Every path feeds the same
    * smoothed aim on the engine, so the turn is eased rather than snapped, and
    * the map view has no heading and ignores all of it.
@@ -162,19 +162,20 @@ export default function App() {
       if (!g || g.cameraMode !== 'walk' || g.status !== 'playing') return
       if (e.pointerType === 'mouse') {
         if (g.lookMode === 'free') {
-          // free look needs the cursor, and a click is the gesture that asks for
+          // free look needs the cursor, and a right click is the gesture that asks for
           // it: from here on every move turns the view, no button to hold
+          if (e.button !== 2) return
           e.preventDefault()
           if (!locked()) void canvas.requestPointerLock?.()
           return
         }
-        // the right button drag is the default; anything else is the page's
-        if (g.lookMode !== 'drag' || e.button !== 2) return
+        // the left button drag is the default; anything else is the page's
+        if (g.lookMode !== 'drag' || e.button !== 0) return
       }
       dragging = true
       lastX = e.clientX
       lastY = e.clientY
-      // a right button drag must not raise the browser's own menu mid turn
+      // do not let a browser context menu interrupt street camera use
       e.preventDefault()
       canvas.setPointerCapture?.(e.pointerId)
     }
@@ -199,7 +200,7 @@ export default function App() {
       if (!dragging) return
       // the button can be let go outside the window; a mouse with nothing held is
       // not a drag, whatever the last event happened to say
-      if (e.pointerType === 'mouse' && e.buttons === 0) {
+      if (e.pointerType === 'mouse' && (e.buttons & 1) === 0) {
         dragging = false
         return
       }
@@ -215,7 +216,7 @@ export default function App() {
     /** the context menu belongs to the page, not to a camera drag */
     const menu = (e: Event) => {
       const g = gameRef.current
-      if (g && g.cameraMode === 'walk' && g.lookMode === 'drag') e.preventDefault()
+      if (g && g.cameraMode === 'walk' && g.lookMode !== 'off') e.preventDefault()
     }
     canvas.addEventListener('pointerdown', down)
     canvas.addEventListener('pointermove', move)
@@ -243,6 +244,12 @@ export default function App() {
       if (!g) return
       // Let the player type freely in puzzle/dialog inputs — never hijack WASD there
       if (isTypingTarget(e.target)) return
+      // Browsers repeat keydown while a key is held. Actions are taps, so one
+      // press should never eat several items or queue repeated interactions.
+      if (e.repeat && ['KeyE', 'Space', 'KeyH', 'KeyF', 'KeyG', 'KeyT'].includes(e.code)) {
+        e.preventDefault()
+        return
+      }
       // While an overlay is up, don't move the stickman or queue actions
       if (g.status !== 'playing') {
         if (e.code === 'Enter' && g.status === 'dialog') g.closeDialog()
@@ -263,11 +270,27 @@ export default function App() {
     const up = (e: KeyboardEvent) => {
       gameRef.current?.setKey(e.code, false)
     }
+    // A key-up can be lost when the app is backgrounded or focus moves to
+    // browser chrome. Clear every movement key so a returning player never
+    // finds the runner walking on its own.
+    const releaseAll = () => {
+      const g = gameRef.current
+      if (!g) return
+      for (const code of [
+        'KeyW', 'KeyA', 'KeyS', 'KeyD',
+        'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+        'ShiftLeft', 'ShiftRight',
+      ]) g.setKey(code, false)
+    }
     window.addEventListener('keydown', down)
     window.addEventListener('keyup', up)
+    window.addEventListener('blur', releaseAll)
+    document.addEventListener('visibilitychange', releaseAll)
     return () => {
       window.removeEventListener('keydown', down)
       window.removeEventListener('keyup', up)
+      window.removeEventListener('blur', releaseAll)
+      document.removeEventListener('visibilitychange', releaseAll)
     }
   }, [])
 

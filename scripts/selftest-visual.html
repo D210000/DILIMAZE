@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DILIMAZE visual self-test</title>
+    <style>
+      body { margin: 0; padding: 24px; background: #121024; color: #f7f2ff; font: 14px/1.5 system-ui, sans-serif; }
+      h1 { color: #8df4ff; }
+      pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 18px; border-radius: 12px; background: #241b43; }
+      .pass { color: #80ffc2; }
+      .fail { color: #ff8585; }
+      #gallery { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+      figure { margin: 0; overflow: hidden; border: 1px solid #514a7d; border-radius: 12px; background: #201a3a; }
+      figcaption { padding: 8px 12px; color: #8df4ff; font-weight: 700; }
+      canvas { display: block; width: 100%; height: auto; }
+      #guard-gallery { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; }
+    </style>
+  </head>
+  <body>
+    <h1>DILIMAZE self-test</h1>
+    <p id="status">Running deterministic checks…</p>
+    <pre id="results"></pre>
+    <h1>Guard patrol designs</h1>
+    <div id="guard-gallery"></div>
+    <h1>City archetype comparison</h1>
+    <div id="gallery"></div>
+    <h1>Map-view roof and ground treatments</h1>
+    <div id="map-gallery"></div>
+    <script type="module">
+      import { runSelfTest } from '/src/devtools/selftest.ts'
+      import { Game } from '/src/game/engine.ts'
+      import { drawGuard, render } from '/src/game/render.ts'
+      const cities = [1, 6, 11, 16, 36]
+      const gallery = document.querySelector('#gallery')
+      const mapGallery = document.querySelector('#map-gallery')
+      const guardGallery = document.querySelector('#guard-gallery')
+      const guardSamples = [
+        { city: 1, role: 'beat', label: 'PATROL · BRAWLER' },
+        { city: 11, role: 'gun', label: 'GUNNER · RANGED FIRE' },
+        { city: 30, role: 'tracker', label: 'TRACKER · CLOSE SCAN' },
+        { city: 30, role: 'charger', label: 'CHARGER · BURST PURSUIT' },
+        { city: 60, role: 'captain', label: 'CAPTAIN · ELITE ARMOR' },
+      ]
+      for (const sample of guardSamples) {
+        const game = new Game(sample.city)
+        const guard = sample.role === 'captain'
+          ? game.world.guards.find((g) => g.captain)
+          : game.world.guards.find((g) => g.role === sample.role)
+        if (!guard) continue
+        const figure = document.createElement('figure')
+        const caption = document.createElement('figcaption')
+        caption.textContent = `CITY ${sample.city} · ${sample.label}`
+        const canvas = document.createElement('canvas')
+        canvas.width = 240
+        canvas.height = 210
+        const ctx = canvas.getContext('2d')
+        const sky = ctx.createLinearGradient(0, 0, 0, canvas.height)
+        sky.addColorStop(0, '#211b42')
+        sky.addColorStop(1, '#0d1026')
+        ctx.fillStyle = sky
+        ctx.fillRect(0, 0, canvas.width, canvas.height)
+        ctx.fillStyle = '#24213c'
+        ctx.fillRect(0, 154, canvas.width, 56)
+        ctx.scale(3, 3)
+        drawGuard(ctx, { ...guard, x: 40, y: 50, dir: -Math.PI / 2 }, game.world.region)
+        figure.append(caption, canvas)
+        guardGallery.append(figure)
+      }
+      for (const city of cities) {
+        const game = new Game(city)
+        game.setCameraMode('walk')
+        const figure = document.createElement('figure')
+        const caption = document.createElement('figcaption')
+        caption.textContent = `CITY ${city} · ${game.world.archetype.name}`
+        const canvas = document.createElement('canvas')
+        canvas.width = 640
+        canvas.height = 360
+        render(canvas.getContext('2d'), game, canvas.width, canvas.height)
+        figure.append(caption, canvas)
+        gallery.append(figure)
+
+        const mapGame = new Game(city)
+        const mapFigure = document.createElement('figure')
+        const mapCaption = document.createElement('figcaption')
+        mapCaption.textContent = `CITY ${city} · ${mapGame.world.archetype.name}`
+        const mapCanvas = document.createElement('canvas')
+        mapCanvas.width = 640
+        mapCanvas.height = 360
+        render(mapCanvas.getContext('2d'), mapGame, mapCanvas.width, mapCanvas.height)
+        mapFigure.append(mapCaption, mapCanvas)
+        mapGallery.append(mapFigure)
+      }
+      const status = document.querySelector('#status')
+      const results = document.querySelector('#results')
+      try {
+        const report = runSelfTest()
+        status.textContent = `${report.ok ? 'PASS' : 'FAIL'} · ${report.passed} passed · ${report.failed} failed`
+        status.className = report.ok ? 'pass' : 'fail'
+        results.textContent = report.results.map((item) => `${item.ok ? '✓' : '✗'} ${item.name}${item.detail ? ` — ${item.detail}` : ''}`).join('\n')
+      } catch (error) {
+        status.textContent = `FAILED TO RUN: ${error}`
+        status.className = 'fail'
+      }
+    </script>
+  </body>
+</html>

@@ -71,7 +71,7 @@ export interface Clue {
  *  - `wide` — a watcher that sweeps most of a corner at once;
  *  - `gun`  — a shooter: holds its ground and fires down the cone from range.
  */
-export type GuardRole = 'beat' | 'long' | 'wide' | 'gun'
+export type GuardRole = 'beat' | 'long' | 'wide' | 'gun' | 'charger' | 'tracker'
 
 export interface Guard {
   id: number
@@ -94,8 +94,16 @@ export interface Guard {
   visionDist: number
   visionHalfAngle: number
   stuckTimer: number
+  /** Temporary tile route around a blocked direct path. */
+  detourPath: Vec[]
+  detourWp: number
+  detourTarget: Vec | null
   /** seconds until a shooter may fire again (0 for everyone else) */
   attackCd: number
+  /** seconds until a charger may burst again */
+  abilityCd: number
+  /** remaining time in a charger burst */
+  burstTimer: number
   /** how long the muzzle flash / tracer stays lit, in seconds */
   flash: number
   /** where the last shot was aimed, while `flash` burns */

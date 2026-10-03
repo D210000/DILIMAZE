@@ -54,7 +54,10 @@ export function HUD({ snap }: { snap: Snapshot }) {
         <div className="hud-title">
           CITY {snap.city}/100 <span className="hud-sep">·</span> {snap.region.toUpperCase()}
         </div>
-        <div className="hud-type">{snap.cityType.toUpperCase()}</div>
+        <div className="hud-type" data-archetype={snap.cityType}>
+          <span className="hud-type-mark" aria-hidden="true">◆</span>
+          {snap.cityType.toUpperCase()}
+        </div>
         <div className="hud-sub">
           {snap.playerName} · Day {snap.day} · {clock} · {snap.daysInCity}d here{' '}
           <span className="hud-timer" title="Level timer, counted for the ranking">

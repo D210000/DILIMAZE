@@ -362,6 +362,67 @@ function drawTiles(
       ctx.fillStyle = lighten(r.building, 14)
       ctx.fillRect(px + 3, py + 3, TS - 6, TS - 6)
 
+      const archetype = world.archetype?.id
+      if (archetype === 'village') {
+        // From above, cottage roofs get a broad gable ridge and warm shingle
+        // seams instead of the flat commercial roof used by the metro.
+        ctx.fillStyle = shade(r.buildingAlt, -5)
+        ctx.beginPath()
+        ctx.moveTo(px + 3, py + 11)
+        ctx.lineTo(px + TS / 2, py + 3)
+        ctx.lineTo(px + TS - 3, py + 11)
+        ctx.lineTo(px + TS - 3, py + TS - 4)
+        ctx.lineTo(px + 3, py + TS - 4)
+        ctx.closePath()
+        ctx.fill()
+        ctx.strokeStyle = withAlpha('#ffe2a0', 0.58)
+        ctx.lineWidth = 1
+        ctx.beginPath()
+        ctx.moveTo(px + 8, py + 14)
+        ctx.lineTo(px + TS - 8, py + 14)
+        ctx.moveTo(px + 8, py + 20)
+        ctx.lineTo(px + TS - 8, py + 20)
+        ctx.stroke()
+      } else if (archetype === 'future') {
+        // Glass towers carry clean rooftop equipment and a cyan-lit crown.
+        ctx.fillStyle = withAlpha('#c8ffff', 0.62)
+        ctx.fillRect(px + 7, py + 7, 7, 5)
+        ctx.fillRect(px + 19, py + 7, 7, 5)
+        ctx.fillStyle = withAlpha(r.neon2, 0.9)
+        ctx.fillRect(px + 5, py + 4, TS - 10, 1.6)
+        ctx.strokeStyle = withAlpha('#e1ffff', 0.42)
+        ctx.lineWidth = 1
+        ctx.strokeRect(px + 5, py + 5, TS - 10, TS - 10)
+      } else if (archetype === 'forest' && tileHash(x + 53, y + 17) > 0.35) {
+        // Moss and a tiny planted patch echo the forest canopy between blocks.
+        ctx.fillStyle = withAlpha('#8bce73', 0.48)
+        ctx.fillRect(px + 5, py + 7, 10, 6)
+        ctx.fillStyle = withAlpha('#c4ef8f', 0.52)
+        ctx.fillRect(px + 8, py + 5, 3, 3)
+      } else if (archetype === 'ruins' && tileHash(x + 71, y + 29) > 0.3) {
+        // A broken roof edge and a dark fracture distinguish abandoned blocks.
+        ctx.fillStyle = r.grass
+        ctx.beginPath()
+        ctx.moveTo(px + TS - 2, py + 3)
+        ctx.lineTo(px + TS - 2, py + 12)
+        ctx.lineTo(px + TS - 10, py + 8)
+        ctx.closePath()
+        ctx.fill()
+        ctx.strokeStyle = withAlpha('#211d1c', 0.65)
+        ctx.lineWidth = 1.5
+        ctx.beginPath()
+        ctx.moveTo(px + 9, py + 22)
+        ctx.lineTo(px + 16, py + 17)
+        ctx.lineTo(px + 20, py + 24)
+        ctx.stroke()
+      } else if (archetype === 'metro' && tileHash(x + 41, y + 31) > 0.58) {
+        // Repeating light strips turn dense metro roofs into a lit commercial grid.
+        ctx.fillStyle = withAlpha(r.neon, 0.75)
+        ctx.fillRect(px + 5, py + 6, 2, TS - 12)
+        ctx.fillStyle = withAlpha(r.neon2, 0.72)
+        ctx.fillRect(px + TS - 7, py + 6, 2, TS - 12)
+      }
+
       // skylights and rooftop clutter, deterministic per tile
       const seed = Math.abs((x * 73856093) ^ (y * 19349663)) % 5
       if (seed < 3) {
@@ -1040,7 +1101,11 @@ export function drawGuard(ctx: CanvasRenderingContext2D, gd: Guard, r: Region) {
   const s = 1 + gd.tier * 0.07 + (gd.captain ? 0.07 : 0)
   const standing = gd.state === 'search' || gd.state === 'suspicious'
   const step = standing ? 0 : Math.sin(performance.now() / 170 + gd.id * 1.9)
-  const glow = chasing ? C.bad : uneasy ? C.warn : art.visor
+  const glow = gd.role === 'charger' && gd.burstTimer > 0
+    ? '#ffb24a'
+    : gd.role === 'tracker' && !chasing
+      ? '#61f2dc'
+      : chasing ? C.bad : uneasy ? C.warn : art.visor
 
   const feet = gd.y + 9 * s
   const hip = feet - 6.5 * s
@@ -1086,6 +1151,29 @@ export function drawGuard(ctx: CanvasRenderingContext2D, gd: Guard, r: Region) {
   ctx.fillStyle = art.plate
   ctx.fillRect(gd.x - 7.5 * s, shoulder - 1.6 * s, 3.6 * s, 3.4 * s)
   ctx.fillRect(gd.x + 3.9 * s, shoulder - 1.6 * s, 3.6 * s, 3.4 * s)
+  // raised shoulder shells and articulated forearms give the patrol a stronger
+  // silhouette at map scale, while still reading clearly in the street camera.
+  ctx.fillStyle = shade(art.plate, 0.22)
+  ctx.beginPath()
+  ctx.moveTo(gd.x - 7.8 * s, shoulder - 1.4 * s)
+  ctx.lineTo(gd.x - 4.4 * s, shoulder - 2.1 * s)
+  ctx.lineTo(gd.x - 3.1 * s, shoulder + 1.2 * s)
+  ctx.lineTo(gd.x - 6.7 * s, shoulder + 2.1 * s)
+  ctx.closePath()
+  ctx.fill()
+  ctx.beginPath()
+  ctx.moveTo(gd.x + 7.8 * s, shoulder - 1.4 * s)
+  ctx.lineTo(gd.x + 4.4 * s, shoulder - 2.1 * s)
+  ctx.lineTo(gd.x + 3.1 * s, shoulder + 1.2 * s)
+  ctx.lineTo(gd.x + 6.7 * s, shoulder + 2.1 * s)
+  ctx.closePath()
+  ctx.fill()
+  ctx.fillStyle = art.coat
+  ctx.fillRect(gd.x - 8.1 * s, shoulder + 1.1 * s, 2.7 * s, 5.2 * s)
+  ctx.fillRect(gd.x + 5.4 * s, shoulder + 1.1 * s, 2.7 * s, 5.2 * s)
+  ctx.fillStyle = art.trim
+  ctx.fillRect(gd.x - 7.9 * s, shoulder + 4.5 * s, 2.4 * s, 1.1 * s)
+  ctx.fillRect(gd.x + 5.5 * s, shoulder + 4.5 * s, 2.4 * s, 1.1 * s)
   if (gd.captain) {
     ctx.fillStyle = C.gold
     ctx.fillRect(gd.x - 7.5 * s, shoulder - 2.8 * s, 3.6 * s, 1.4 * s)
@@ -1094,8 +1182,12 @@ export function drawGuard(ctx: CanvasRenderingContext2D, gd: Guard, r: Region) {
 
   // chest lamp: the better equipped tiers carry one
   if (gd.tier >= 1) {
+    ctx.fillStyle = shade(art.plate, 0.18)
+    ctx.fillRect(gd.x - 2.3 * s, shoulder + 1.8 * s, 4.6 * s, 3.8 * s)
     ctx.fillStyle = withAlpha(art.visor, 0.9)
-    ctx.fillRect(gd.x - 1.2 * s, shoulder + 2.4 * s, 2.4 * s, 2.4 * s)
+    ctx.fillRect(gd.x - 1.2 * s, shoulder + 2.5 * s, 2.4 * s, 2.2 * s)
+    ctx.fillStyle = withAlpha(art.trim, 0.9)
+    ctx.fillRect(gd.x - 1.7 * s, shoulder + 6.7 * s, 3.4 * s, 1.1 * s)
   }
 
   // a rim of the region's own neon, so a guard belongs to the street it walks
@@ -1112,6 +1204,11 @@ export function drawGuard(ctx: CanvasRenderingContext2D, gd: Guard, r: Region) {
   ctx.arc(gd.x, headY, 4.7 * s, Math.PI, Math.PI * 2)
   ctx.fill()
   ctx.fillRect(gd.x - 4.7 * s, headY - 0.6 * s, 9.4 * s, 3.4 * s)
+  ctx.strokeStyle = withAlpha(art.trim, 0.8)
+  ctx.lineWidth = 0.9 * s
+  ctx.beginPath()
+  ctx.arc(gd.x, headY - 0.2 * s, 5.2 * s, Math.PI, Math.PI * 2)
+  ctx.stroke()
   ctx.fillStyle = glow
   ctx.shadowColor = glow
   ctx.shadowBlur = chasing ? 12 : 7
@@ -1170,6 +1267,36 @@ export function drawGuard(ctx: CanvasRenderingContext2D, gd: Guard, r: Region) {
     ctx.beginPath()
     ctx.arc(gd.x + 5 * s, shoulder - 6 * s, 2.4 * s, 0, Math.PI * 2)
     ctx.fill()
+  } else if (gd.role === 'tracker') {
+    // paired receiver fins and a scanning pulse distinguish the close-range
+    // tracker from the long watcher, whose lamp is raised above the helmet.
+    ctx.fillStyle = art.plate
+    ctx.fillRect(gd.x - 7 * s, headY - 3 * s, 2.2 * s, 5.6 * s)
+    ctx.fillRect(gd.x + 4.8 * s, headY - 3 * s, 2.2 * s, 5.6 * s)
+    ctx.strokeStyle = withAlpha(glow, 0.75)
+    ctx.lineWidth = 1.2 * s
+    ctx.beginPath()
+    ctx.arc(gd.x, headY, 7.5 * s, Math.PI * 1.12, Math.PI * 1.88)
+    ctx.stroke()
+    ctx.fillStyle = glow
+    ctx.beginPath()
+    ctx.arc(gd.x, headY - 5.8 * s, 1.7 * s, 0, Math.PI * 2)
+    ctx.fill()
+  } else if (gd.role === 'charger') {
+    // bright side rails flare while the enforcer is making its short sprint.
+    ctx.save()
+    ctx.globalAlpha = gd.burstTimer > 0 ? 0.95 : 0.72
+    ctx.strokeStyle = gd.burstTimer > 0 ? '#fff0a6' : art.trim
+    ctx.lineWidth = 2 * s
+    ctx.beginPath()
+    ctx.moveTo(gd.x - 8.2 * s, shoulder + 2 * s)
+    ctx.lineTo(gd.x - 11.4 * s, shoulder + 5.5 * s)
+    ctx.lineTo(gd.x - 7.8 * s, shoulder + 8 * s)
+    ctx.moveTo(gd.x + 8.2 * s, shoulder + 2 * s)
+    ctx.lineTo(gd.x + 11.4 * s, shoulder + 5.5 * s)
+    ctx.lineTo(gd.x + 7.8 * s, shoulder + 8 * s)
+    ctx.stroke()
+    ctx.restore()
   }
 }
 

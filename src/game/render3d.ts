@@ -1,7 +1,7 @@
 import { TS, clueAssist } from './city'
 import { drawCharacter } from './character'
 import { BRAND } from './brand'
-import { dayLight, MAX_DARKNESS, type Game } from './engine'
+import { dayLight, streetRight, MAX_DARKNESS, type Game } from './engine'
 import type { Guard, TileKind, World } from './types'
 import { drawGuard, drawProp, drawPropBadges, withAlpha, lighten, shade, desaturate, tileHash } from './render'
 import type { PropMarks } from './render'
@@ -53,7 +53,7 @@ function wallHeight(world: World, tx: number, ty: number): number {
   return Math.max(20, Math.round(WALL_STEPS[idx] * (world.archetype?.height ?? 1) * BUILDING_SCALE))
 }
 
-/** connected building tiles collapsed into one box each, computed once per city */
+/** exact rectangular runs of building tiles, computed once per city */
 function buildingBoxes(world: World): Box[] {
   const cached = boxCache.get(world)
   if (cached) return cached
@@ -63,42 +63,35 @@ function buildingBoxes(world: World): Box[] {
     for (let x = 0; x < world.w; x++) {
       const i = y * world.w + x
       if (seen[i] || world.tiles[i] !== 'building') continue
-      let minX = x
-      let maxX = x
-      let minY = y
-      let maxY = y
-      let h = 0
-      const stack = [i]
-      seen[i] = 1
-      while (stack.length) {
-        const cur = stack.pop()!
-        const cxx = cur % world.w
-        const cyy = Math.floor(cur / world.w)
-        minX = Math.min(minX, cxx)
-        maxX = Math.max(maxX, cxx)
-        minY = Math.min(minY, cyy)
-        maxY = Math.max(maxY, cyy)
-        h = Math.max(h, wallHeight(world, cxx, cyy))
-        const push = (nx: number, ny: number) => {
-          if (nx < 0 || ny < 0 || nx >= world.w || ny >= world.h) return
-          const ni = ny * world.w + nx
-          if (seen[ni] || world.tiles[ni] !== 'building') return
-          seen[ni] = 1
-          stack.push(ni)
+      // Greedily take the widest unclaimed row run, then extend it downward
+      // only while every tile in that rectangle is still a building. Flood
+      // fill plus a bounding box filled L-shaped blocks across their empty
+      // street gaps, which left the camera looking through uncovered ground.
+      let x1 = x + 1
+      while (x1 < world.w && !seen[y * world.w + x1] && world.tiles[y * world.w + x1] === 'building') x1++
+      let y1 = y + 1
+      const rowFits = (row: number) => {
+        for (let tx = x; tx < x1; tx++) {
+          const ri = row * world.w + tx
+          if (seen[ri] || world.tiles[ri] !== 'building') return false
         }
-        push(cxx + 1, cyy)
-        push(cxx - 1, cyy)
-        push(cxx, cyy + 1)
-        push(cxx, cyy - 1)
+        return true
       }
+      while (y1 < world.h && rowFits(y1)) y1++
+      let h = 0
+      for (let ty = y; ty < y1; ty++)
+        for (let tx = x; tx < x1; tx++) {
+          seen[ty * world.w + tx] = 1
+          h = Math.max(h, wallHeight(world, tx, ty))
+        }
       boxes.push({
-        x0: minX,
-        y0: minY,
-        x1: maxX + 1,
-        y1: maxY + 1,
+        x0: x,
+        y0: y,
+        x1,
+        y1,
         h,
-        cx: ((minX + maxX + 1) / 2) * TS,
-        cy: ((minY + maxY + 1) / 2) * TS,
+        cx: ((x + x1) / 2) * TS,
+        cy: ((y + y1) / 2) * TS,
       })
     }
 
@@ -208,15 +201,19 @@ export function render3D(ctx: CanvasRenderingContext2D, game: Game, viewW: numbe
   fx /= flen
   fy /= flen
   fz /= flen
-  let rx = fy
-  let ry = -fx
+  // The runner's right hand, from the same helper the walk mapping steps with,
+  // so the drawn right edge of the street is the direction D moves. Screen up
+  // is forward cross right, which keeps pointing up as the camera pitches.
+  const right = streetRight(yaw)
+  let rx = right.x
+  let ry = right.y
   const rlen = Math.hypot(rx, ry) || 1
   rx /= rlen
   ry /= rlen
   const rz = 0
-  const ux = ry * fz - rz * fy
-  const uy = rz * fx - rx * fz
-  const uz = rx * fy - ry * fx
+  const ux = -fz * ry
+  const uy = fz * rx
+  const uz = fx * ry - fy * rx
 
   const focal = viewH * 0.82
   const cxScreen = viewW / 2
@@ -232,6 +229,37 @@ export function render3D(ctx: CanvasRenderingContext2D, game: Game, viewW: numbe
     const syv = dx * ux + dy * uy + dz * uz
     const s = focal / depth
     return { x: cxScreen + sxv * s, y: horizon - syv * s, s, depth }
+  }
+
+  // Clip every world polygon against the camera's near plane before projecting.
+  // Dropping a whole quad because one corner is too close opens dark holes as
+  // the runner passes buildings and ground tiles.
+  const clipProjectPolygon = (points: Array<{ x: number; y: number; z: number }>): Pt[] => {
+    const depthOf = (v: { x: number; y: number; z: number }) =>
+      (v.x - camX) * fx + (v.y - camY) * fy + (v.z - camZ) * fz
+    const clipped: Array<{ x: number; y: number; z: number }> = []
+    let prev = points[points.length - 1]
+    let prevDepth = depthOf(prev)
+    for (const curr of points) {
+      const currDepth = depthOf(curr)
+      const prevInside = prevDepth > NEAR
+      const currInside = currDepth > NEAR
+      if (prevInside !== currInside) {
+        const t = (NEAR + 0.01 - prevDepth) / (currDepth - prevDepth)
+        clipped.push({
+          x: prev.x + (curr.x - prev.x) * t,
+          y: prev.y + (curr.y - prev.y) * t,
+          z: prev.z + (curr.z - prev.z) * t,
+        })
+      }
+      if (currInside) clipped.push(curr)
+      prev = curr
+      prevDepth = currDepth
+    }
+    return clipped.map((v) => {
+      const pt = project(v.x, v.y, v.z)
+      return pt ? { x: pt.x, y: pt.y } : null
+    }).filter((pt): pt is Pt => pt !== null)
   }
 
   /* ---- sky, sun and moon ------------------------------------------------ */
@@ -297,10 +325,25 @@ export function render3D(ctx: CanvasRenderingContext2D, game: Game, viewW: numbe
   const mr = amb * (1 + 0.24 * warm)
   const mg = amb * (1 + 0.05 * warm)
   const mb = amb * (1 - 0.12 * warm) * (frac < 0.5 ? 1 : 0.72)
+  // Pavement and grass need a little more fill light than vertical surfaces.
+  // Letting the blue night multiplier fall all the way with the skyline made
+  // edge tiles read as black holes once the player had walked into dusk.
+  const floorMr = Math.max(0.72, mr)
+  const floorMg = Math.max(0.72, mg)
+  const floorMb = Math.max(0.72, mb)
 
   /* ---- ground base, so the world past the map edge is not sky ----------- */
-  const groundBase = lit(desaturate(r.grass, 0.2), mr * 0.7, mg * 0.7, mb * 0.7)
-  ctx.fillStyle = groundBase
+  // The fallback sits under off-map corners and any clipped world geometry.
+  // Grass-only colouring made those uncovered wedges read as black cut-outs
+  // beside the brighter asphalt, especially while the near edge of a tile
+  // crossed the camera plane. Blend the city's grass into its road and keep
+  // the base close to the pavement value so an exposed seam stays unobtrusive.
+  const groundFar = lit(mix(desaturate(r.grass, 0.28), desaturate(r.road, 0.5), 0.56), floorMr * 0.94, floorMg * 0.94, floorMb * 0.94)
+  const groundNear = lit(desaturate(r.road, 0.44), floorMr * 0.96, floorMg * 0.96, floorMb * 0.96)
+  const fallbackGround = ctx.createLinearGradient(0, horizon, 0, viewH)
+  fallbackGround.addColorStop(0, groundFar)
+  fallbackGround.addColorStop(1, groundNear)
+  ctx.fillStyle = fallbackGround
   ctx.fillRect(0, horizon - 2, viewW, viewH - (horizon - 2))
 
   const quad = (
@@ -347,9 +390,12 @@ export function render3D(ctx: CanvasRenderingContext2D, game: Game, viewW: numbe
   }
 
   /* ---- ground tiles, far to near, lit and fogged ------------------------ */
-  // the whole city is laid out every frame, corner to corner, so walking in
-  // never reveals a missing edge of map: the distance limit is the map diagonal
-  // and everything past that is simply behind the camera or off the sides
+  // Every tile the view can actually see is projected and drawn each frame, so
+  // nothing is streamed in as the runner moves and the ground can never pop.
+  // They are only skipped once the WHOLE quad is off the screen, which is why
+  // the test must allow for the tile's own projected size: a tile close to the
+  // camera projects very large, and culling it on its centre alone used to cut a
+  // visible chunk out of the near ground, a dark bare patch at the edges.
   const mapReach = Math.hypot(world.w, world.h) * TS + TS * 2
   const maxD2 = mapReach * mapReach
   const tiles: Array<{ d: number; x: number; y: number }> = []
@@ -362,14 +408,18 @@ export function render3D(ctx: CanvasRenderingContext2D, game: Game, viewW: numbe
       const ddx = wx - camX
       const ddy = wy - camY
       const depth = ddx * fx + ddy * fy
-      if (depth <= NEAR) continue
       if (ddx * ddx + ddy * ddy > maxD2) continue
-      // frustum cull: the wider view means many tiles sit far off the sides.
-      // Tiles right under the camera are kept, so the near ground never holes.
       if (depth > TS * 3) {
         const inv = focal / depth
-        if (Math.abs((ddx * rx + ddy * ry) * inv) > viewW / 2 + 96) continue
-        if (Math.abs((ddx * ux + ddy * uy - camZ * uz) * inv) > viewH / 2 + 96) continue
+        // half the tile's projected diagonal on screen, so the margin grows with
+        // how large that tile actually draws
+        const rad = TS * inv * 0.75
+        const sx = (ddx * rx + ddy * ry) * inv
+        if (Math.abs(sx) > viewW / 2 + rad) continue
+        // screen y = horizon - sy, so keep anything whose quad can reach the band
+        // [0, viewH]; the bounds are not symmetric about the centre
+        const sy = (ddx * ux + ddy * uy - camZ * uz) * inv
+        if (sy < horizon - viewH - rad || sy > horizon + rad) continue
       }
       tiles.push({ d: depth, x: tx, y: ty })
     }
@@ -377,6 +427,45 @@ export function render3D(ctx: CanvasRenderingContext2D, game: Game, viewW: numbe
   const lerpPt = (a: Pt, b: Pt, t: number): Pt => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t })
   const tile = (x: number, y: number): TileKind | null =>
     x < 0 || y < 0 || x >= world.w || y >= world.h ? null : world.tiles[y * world.w + x]
+
+  // The spawn sits just inside the west wall. Carry the entry avenue a few
+  // blocks past the map edge so the chase camera always has street beneath it
+  // on the first frame instead of a blank foreground void.
+  const entryY = world.spawn.y * TS
+  // The near edge must stay in front of the camera: project() deliberately
+  // clips anything behind its near plane, so starting behind the rig would
+  // discard the whole apron instead of only its hidden edge.
+  const entryX0 = camX + TS * 1.6
+  const entryX1 = world.spawn.x * TS + TS * 2
+  const entryCorners = [
+    project(entryX0, entryY - TS * 1.5, 0),
+    project(entryX1, entryY - TS * 1.5, 0),
+    project(entryX1, entryY + TS * 1.5, 0),
+    project(entryX0, entryY + TS * 1.5, 0),
+  ]
+  if (entryCorners.every((pt): pt is NonNullable<typeof pt> => pt !== null)) {
+    const [a, b, c, d] = entryCorners
+    quad(a, b, c, d, lit(r.road, floorMr, floorMg, floorMb))
+    const at = (u: number, v: number) => lerpPt(lerpPt(a, b, u), lerpPt(d, c, u), v)
+    // raised kerb paint lines on both edges, with a broken centre stripe
+    const e0 = at(0, 0.045)
+    const e1 = at(1, 0.045)
+    const e2 = at(0, 0.955)
+    const e3 = at(1, 0.955)
+    quad(a, b, e1, e0, lit(lighten(r.road, 26), floorMr, floorMg, floorMb))
+    quad(d, c, e3, e2, lit(lighten(r.road, 26), floorMr, floorMg, floorMb))
+    for (let x = Math.ceil(entryX0 / TS); x < entryX1 / TS; x += 2) {
+      const x0 = Math.max(entryX0, x * TS + TS * 0.18)
+      const x1 = Math.min(entryX1, x * TS + TS * 0.76)
+      const dash = [
+        project(x0, entryY - TS * 0.035, 0),
+        project(x1, entryY - TS * 0.035, 0),
+        project(x1, entryY + TS * 0.035, 0),
+        project(x0, entryY + TS * 0.035, 0),
+      ]
+      if (dash.every((pt) => pt !== null)) quad(dash[0]!, dash[1]!, dash[2]!, dash[3]!, withAlpha('#ffe9a8', 0.58))
+    }
+  }
 
   for (const t of tiles) {
     const x0 = t.x * TS
@@ -387,21 +476,38 @@ export function render3D(ctx: CanvasRenderingContext2D, game: Game, viewW: numbe
     const b = project(x1, y0, 0)
     const c = project(x1, y1, 0)
     const d = project(x0, y1, 0)
-    if (!a || !b || !c || !d) continue
     const kind = world.tiles[t.y * world.w + t.x]
+    if (!a || !b || !c || !d) {
+      const clipped = clipProjectPolygon([
+        { x: x0, y: y0, z: 0 }, { x: x1, y: y0, z: 0 },
+        { x: x1, y: y1, z: 0 }, { x: x0, y: y1, z: 0 },
+      ])
+      if (clipped.length >= 3) {
+        ctx.fillStyle = lit(groundColor(t.x, t.y, kind), floorMr, floorMg, floorMb)
+        ctx.beginPath()
+        ctx.moveTo(clipped[0].x, clipped[0].y)
+        for (let i = 1; i < clipped.length; i++) ctx.lineTo(clipped[i].x, clipped[i].y)
+        ctx.closePath()
+        ctx.fill()
+        ctx.strokeStyle = ctx.fillStyle
+        ctx.lineWidth = 1
+        ctx.stroke()
+      }
+      continue
+    }
 
     if (kind === 'water') {
       // a pond: deep blue carrying the sky's reflection, a highlight band that
       // drifts with the clock, and a stone kerb wherever it meets the paving
       const at = (u: number, v: number): Pt => lerpPt(lerpPt(a, b, u), lerpPt(d, c, u), v)
-      quad(a, b, c, d, lit(mix('#1d4f78', skyHorizon, 0.45), mr, mg, mb))
+      quad(a, b, c, d, lit(mix('#1d4f78', skyHorizon, 0.45), floorMr, floorMg, floorMb))
       // a darker far half, so the water reads as a surface with depth
-      quad(d, c, at(1, 0.45), at(0, 0.45), lit(mix('#153f60', skyHorizon, 0.3), mr, mg, mb))
+      quad(d, c, at(1, 0.45), at(0, 0.45), lit(mix('#153f60', skyHorizon, 0.3), floorMr, floorMg, floorMb))
       const ph = (now / 900 + (t.x * 0.7 + t.y * 1.3)) % 1
       const v0 = 0.12 + ph * 0.6
       const v1 = Math.min(0.94, v0 + 0.13)
       quad(at(0.1, v0), at(0.9, v0), at(0.9, v1), at(0.1, v1), withAlpha('#ffffff', 0.14))
-      const kerb = lit(shade(r.road, -6), mr, mg, mb)
+      const kerb = lit(shade(r.road, -6), floorMr, floorMg, floorMb)
       if (tile(t.x, t.y - 1) !== 'water') quad(a, b, at(1, 0.16), at(0, 0.16), kerb)
       if (tile(t.x, t.y + 1) !== 'water') quad(d, c, at(1, 0.84), at(0, 0.84), kerb)
       if (tile(t.x - 1, t.y) !== 'water') quad(a, d, at(0.16, 1), at(0.16, 0), kerb)
@@ -409,25 +515,63 @@ export function render3D(ctx: CanvasRenderingContext2D, game: Game, viewW: numbe
       continue
     }
 
-    const col = lit(groundColor(t.x, t.y, kind), mr, mg, mb)
+    const col = lit(groundColor(t.x, t.y, kind), floorMr, floorMg, floorMb)
     quad(a, b, c, d, col)
+
+    // City streets get a perspective-scaled lane rhythm. The stripe only runs
+    // through the central lane tile, so the two outer lanes stay clean.
+    if (kind === 'road') {
+      const horizontal = tile(t.x - 1, t.y) === 'road' && tile(t.x + 1, t.y) === 'road'
+      const vertical = tile(t.x, t.y - 1) === 'road' && tile(t.x, t.y + 1) === 'road'
+      const centerLane = horizontal
+        ? tile(t.x, t.y - 1) !== 'road' && tile(t.x, t.y + 1) !== 'road'
+        : vertical && tile(t.x - 1, t.y) !== 'road' && tile(t.x + 1, t.y) !== 'road'
+      if (centerLane && (horizontal ? t.x % 3 !== 1 : t.y % 3 !== 1)) {
+        const at = (u: number, v: number): Pt => lerpPt(lerpPt(a, b, u), lerpPt(d, c, u), v)
+        if (horizontal) quad(at(0.12, 0.46), at(0.82, 0.46), at(0.82, 0.54), at(0.12, 0.54), withAlpha('#ffe9a8', 0.56))
+        else quad(at(0.46, 0.12), at(0.54, 0.12), at(0.54, 0.82), at(0.46, 0.82), withAlpha('#ffe9a8', 0.56))
+      }
+    }
   }
 
   /* ---- everything that stands up, sorted far to near -------------------- */
   type Item = { d: number; draw: () => void }
   const items: Item[] = []
+  const litProp = (hex: string) => lit(hex, mr, mg, mb)
+
+  // Forest clearings grow into the unused superblocks themselves: these
+  // non-colliding canopy silhouettes make the archetype read as woodland in
+  // first-person, even when the generated prop scatter is sparse.
+  if (world.archetype.id === 'forest') {
+    for (let y = 0; y < world.h; y++)
+      for (let x = 0; x < world.w; x++) {
+        if (world.tiles[y * world.w + x] !== 'park' || tileHash(x + 281, y + 97) < 0.82) continue
+        const wx = (x + 0.5) * TS
+        const wy = (y + 0.5) * TS
+        const pt = project(wx, wy, 0)
+        if (!pt || pt.depth <= NEAR * 1.5 || pt.depth > mapReach) continue
+        items.push({
+          d: pt.depth,
+          draw: () => {
+            ctx.save()
+            ctx.translate(pt.x, pt.y)
+            ctx.scale(Math.min(6, pt.s * 1.35), Math.min(6, pt.s * 1.35))
+            drawTree3D(ctx, litProp, true)
+            ctx.restore()
+          },
+        })
+      }
+  }
 
   for (const box of buildingBoxes(world)) {
     const d = Math.hypot(box.cx - camX, box.cy - camY)
     if (d > mapReach) continue
-    items.push({ d, draw: () => drawBox(ctx, project, quad, box, camX, camY, camZ, world, mr, mg, mb, dayAmt, d) })
+    items.push({ d, draw: () => drawBox(ctx, project, clipProjectPolygon, quad, box, camX, camY, camZ, world, mr, mg, mb, dayAmt, d) })
   }
 
   const solved = new Set(world.clues.slice(0, p.clueIndex).map((cl) => cl.propId))
   const nextClueId = world.clues[p.clueIndex]?.propId ?? -1
   const assisted = clueAssist(world.city, p.clueIndex)
-
-  const litProp = (hex: string) => lit(hex, mr, mg, mb)
 
   for (const pr of world.props) {
     if (pr.used && pr.kind === 'coin') continue
@@ -446,7 +590,7 @@ export function render3D(ctx: CanvasRenderingContext2D, game: Game, viewW: numbe
         ctx.save()
         ctx.translate(pt.x, pt.y)
         ctx.scale(scale, scale)
-        if (isTree) drawTree3D(ctx, litProp)
+        if (isTree) drawTree3D(ctx, litProp, world.archetype.id === 'forest')
         else if (isBush) drawBush3D(ctx, litProp)
         else if (pr.kind === 'fountain') drawFountain3D(ctx, litProp, now)
         else drawProp(ctx, { ...pr, x: 0, y: 0 }, world)
@@ -623,6 +767,7 @@ type Pt = { x: number; y: number }
 function drawBox(
   ctx: CanvasRenderingContext2D,
   project: (x: number, y: number, z: number) => Pt & { s: number; depth: number } | null,
+  clipProjectPolygon: (points: Array<{ x: number; y: number; z: number }>) => Pt[],
   quad: (a: Pt, b: Pt, c: Pt, d: Pt, color: string) => void,
   box: Box,
   camX: number,
@@ -637,6 +782,7 @@ function drawBox(
 ) {
   const H = box.h
   const r = world.region
+  const type = world.archetype
   const x0 = box.x0 * TS
   const y0 = box.y0 * TS
   const x1 = box.x1 * TS
@@ -649,39 +795,195 @@ function drawBox(
   const t100 = project(x1, y0, H)
   const t010 = project(x0, y1, H)
   const t110 = project(x1, y1, H)
-  if (!p000 || !p100 || !p010 || !p110 || !t000 || !t100 || !t010 || !t110) return
+  const complete = !!p000 && !!p100 && !!p010 && !!p110 && !!t000 && !!t100 && !!t010 && !!t110
+  const face = (points: Array<{ x: number; y: number; z: number }>, color: string) => {
+    const clipped = clipProjectPolygon(points)
+    if (clipped.length < 3) return
+    ctx.fillStyle = color
+    ctx.beginPath()
+    ctx.moveTo(clipped[0].x, clipped[0].y)
+    for (let i = 1; i < clipped.length; i++) ctx.lineTo(clipped[i].x, clipped[i].y)
+    ctx.closePath()
+    ctx.fill()
+    ctx.strokeStyle = color
+    ctx.lineWidth = 1
+    ctx.stroke()
+  }
 
   const surface = (hex: string) => lit(hex, mr, mg, mb)
 
   // the ring wall is plain stone; the city blocks are tinted by region
-  const litWall = surface(box.plain ? shade(r.building, 34) : shade(r.buildingAlt, 2))
-  const darkWall = surface(box.plain ? shade(r.building, 52) : shade(r.buildingAlt, 52))
+  const litWall = surface(box.plain ? shade(r.building, 34) : shade(r.buildingAlt, type.id === 'village' ? -8 : 2))
+  const darkWall = surface(box.plain ? shade(r.building, 52) : shade(r.buildingAlt, type.id === 'ruins' ? 62 : 52))
   const roof = surface(box.plain ? lighten(shade(r.building, 30), 18) : lighten(r.building, 34))
+  const roofDark = surface(type.id === 'village' ? shade(r.buildingAlt, -10) : shade(r.building, 4))
 
   // side faces, then the roof on top
   const north = camY < y0
   const south = camY > y1
   const west = camX < x0
   const east = camX > x1
-  if (north) quad(p000, p100, t100, t000, darkWall)
-  if (south) quad(p010, p110, t110, t010, litWall)
-  if (west) quad(p000, p010, t010, t000, darkWall)
-  if (east) quad(p100, p110, t110, t100, litWall)
+  if (north) face([{ x: x0, y: y0, z: 0 }, { x: x1, y: y0, z: 0 }, { x: x1, y: y0, z: H }, { x: x0, y: y0, z: H }], darkWall)
+  if (south) face([{ x: x0, y: y1, z: 0 }, { x: x1, y: y1, z: 0 }, { x: x1, y: y1, z: H }, { x: x0, y: y1, z: H }], litWall)
+  if (west) face([{ x: x0, y: y0, z: 0 }, { x: x0, y: y1, z: 0 }, { x: x0, y: y1, z: H }, { x: x0, y: y0, z: H }], darkWall)
+  if (east) face([{ x: x1, y: y0, z: 0 }, { x: x1, y: y1, z: 0 }, { x: x1, y: y1, z: H }, { x: x1, y: y0, z: H }], litWall)
 
   // a window grid on every face we can see, while reasonably close. Windows
   // glow warmer as the light drops, so an evening city reads through the night.
-  if (!box.plain && dist < 16 * TS) {
+  if (!box.plain && dist < 21 * TS && complete) {
     const seed = Math.floor(box.cx * 3 + box.cy * 7)
-    const winLit = withAlpha('#ffe6a6', 0.55 + 0.35 * (1 - dayAmt))
+    const windowTint =
+      type.id === 'metro' ? r.neon2 :
+      type.id === 'future' ? '#c8ffff' :
+      type.id === 'forest' ? '#c5ff9c' :
+      type.id === 'ruins' ? '#ffc46a' : '#ffe1a1'
+    const winLit = withAlpha(windowTint, 0.62 + 0.32 * (1 - dayAmt))
     const winDark = withAlpha('#171330', 0.8)
-    if (north) windowGrid(ctx, p000, p100, t100, t000, H, seed, winLit, winDark)
-    if (south) windowGrid(ctx, p010, p110, t110, t010, H, seed + 31, winLit, winDark)
-    if (west) windowGrid(ctx, p000, p010, t010, t000, H, seed + 61, winLit, winDark)
-    if (east) windowGrid(ctx, p100, p110, t110, t100, H, seed + 97, winLit, winDark)
+    const columns = type.id === 'future' ? 6 : type.id === 'village' ? 3 : 4
+    if (north) windowGrid(ctx, p000, p100, t100, t000, H, seed, winLit, winDark, columns)
+    if (south) windowGrid(ctx, p010, p110, t110, t010, H, seed + 31, winLit, winDark, columns)
+    if (west) windowGrid(ctx, p000, p010, t010, t000, H, seed + 61, winLit, winDark, columns)
+    if (east) windowGrid(ctx, p100, p110, t110, t100, H, seed + 97, winLit, winDark, columns)
   }
 
-  if (camZ > H) {
-    quad(t000, t100, t110, t010, roof)
+  if (complete && !box.plain && type.id === 'future') {
+    // Light rails trace the top corners and vertical mullions of the glass
+    // towers, keeping the skyline legible even when the roof is above the camera.
+    ctx.strokeStyle = withAlpha('#8cf7ff', 0.74)
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    if (north) {
+      ctx.moveTo(t000.x, t000.y)
+      ctx.lineTo(t100.x, t100.y)
+      for (const u of [0.14, 0.86]) {
+        const x = x0 + (x1 - x0) * u
+        const base = project(x, y0, 0)
+        const top = project(x, y0, H)
+        if (base && top) {
+          ctx.moveTo(base.x, base.y)
+          ctx.lineTo(top.x, top.y)
+        }
+      }
+    }
+    if (south) {
+      ctx.moveTo(t010.x, t010.y)
+      ctx.lineTo(t110.x, t110.y)
+      for (const u of [0.14, 0.86]) {
+        const x = x0 + (x1 - x0) * u
+        const base = project(x, y1, 0)
+        const top = project(x, y1, H)
+        if (base && top) {
+          ctx.moveTo(base.x, base.y)
+          ctx.lineTo(top.x, top.y)
+        }
+      }
+    }
+    if (west) {
+      ctx.moveTo(t000.x, t000.y)
+      ctx.lineTo(t010.x, t010.y)
+    }
+    if (east) {
+      ctx.moveTo(t100.x, t100.y)
+      ctx.lineTo(t110.x, t110.y)
+    }
+    ctx.stroke()
+  }
+
+  if (camZ > H && complete) {
+    if (!box.plain && type.id === 'village') {
+      // Low timber homes end in a pitched roof ridge, breaking the flat glass
+      // skyline and giving even small village lots a recognizable silhouette.
+      const ridgeY = (y0 + y1) / 2
+      const ridgeLift = Math.max(10, H * 0.22)
+      const ridge0 = project(x0, ridgeY, H + ridgeLift)
+      const ridge1 = project(x1, ridgeY, H + ridgeLift)
+      if (ridge0 && ridge1) {
+        quad(t000, t100, ridge1, ridge0, roofDark)
+        quad(t010, t110, ridge1, ridge0, roof)
+        quad(t000, t010, ridge0, ridge0, roofDark)
+        quad(t100, t110, ridge1, ridge1, roof)
+        ctx.strokeStyle = withAlpha(r.neon, 0.55)
+        ctx.lineWidth = 1.4
+        ctx.beginPath()
+        ctx.moveTo(ridge0.x, ridge0.y)
+        ctx.lineTo(ridge1.x, ridge1.y)
+        ctx.stroke()
+      } else quad(t000, t100, t110, t010, roof)
+    } else {
+      quad(t000, t100, t110, t010, roof)
+    }
+
+    if (!box.plain && type.id === 'future' && tileHash(Math.floor(box.cx), Math.floor(box.cy)) > 0.18) {
+      // An inset upper floor turns a plaza block into a stepped glass tower.
+      // The cap is generated from the same box footprint, so it stays stable
+      // across frames and grows with the city type's skyline height.
+      const insetX = Math.min(TS * 0.8, Math.max(TS * 0.22, (x1 - x0) * TS * 0.17))
+      const insetY = Math.min(TS * 0.8, Math.max(TS * 0.22, (y1 - y0) * TS * 0.17))
+      const z1 = H + Math.max(18, H * 0.28)
+      const lowNW = project(x0 + insetX, y0 + insetY, H)
+      const lowNE = project(x1 - insetX, y0 + insetY, H)
+      const lowSW = project(x0 + insetX, y1 - insetY, H)
+      const lowSE = project(x1 - insetX, y1 - insetY, H)
+      const topNW = project(x0 + insetX, y0 + insetY, z1)
+      const topNE = project(x1 - insetX, y0 + insetY, z1)
+      const topSW = project(x0 + insetX, y1 - insetY, z1)
+      const topSE = project(x1 - insetX, y1 - insetY, z1)
+      if (lowNW && lowNE && lowSW && lowSE && topNW && topNE && topSW && topSE) {
+        if (north) quad(lowNW, lowNE, topNE, topNW, surface(shade(r.buildingAlt, 2)))
+        if (south) quad(lowSW, lowSE, topSE, topSW, surface(lighten(r.buildingAlt, 12)))
+        if (west) quad(lowNW, lowSW, topSW, topNW, surface(shade(r.buildingAlt, 18)))
+        if (east) quad(lowNE, lowSE, topSE, topNE, surface(lighten(r.buildingAlt, 18)))
+        quad(topNW, topNE, topSE, topSW, surface(lighten(r.building, 46)))
+        const glow = withAlpha('#c8ffff', 0.92)
+        const capDark = withAlpha('#173341', 0.78)
+        if (north) windowGrid(ctx, lowNW, lowNE, topNE, topNW, z1 - H, 100 + Math.floor(box.cx), glow, capDark, 4)
+        if (south) windowGrid(ctx, lowSW, lowSE, topSE, topSW, z1 - H, 170 + Math.floor(box.cy), glow, capDark, 4)
+        // a fine crown light catches the tower edge against the sky
+        ctx.strokeStyle = withAlpha(r.neon2, 0.78)
+        ctx.lineWidth = 1.8
+        ctx.beginPath()
+        ctx.moveTo(topNW.x, topNW.y)
+        ctx.lineTo(topNE.x, topNE.y)
+        ctx.lineTo(topSE.x, topSE.y)
+        ctx.lineTo(topSW.x, topSW.y)
+        ctx.closePath()
+        ctx.stroke()
+      }
+    } else if (!box.plain && type.id === 'metro' && tileHash(Math.floor(box.cx), Math.floor(box.cy) + 11) > 0.52) {
+      // Metro rooftops carry a few needle antennas and cyan beacons.
+      const base = project((x0 + x1) / 2, (y0 + y1) / 2, H)
+      const tip = project((x0 + x1) / 2, (y0 + y1) / 2, H + TS * 0.72)
+      if (base && tip) {
+        ctx.strokeStyle = withAlpha(r.neon2, 0.82)
+        ctx.lineWidth = 1.6
+        ctx.beginPath()
+        ctx.moveTo(base.x, base.y)
+        ctx.lineTo(tip.x, tip.y)
+        ctx.stroke()
+        ctx.fillStyle = withAlpha(r.neon, 0.9)
+        ctx.beginPath()
+        ctx.arc(tip.x, tip.y, 2.2, 0, Math.PI * 2)
+        ctx.fill()
+      }
+    } else if (!box.plain && type.id === 'ruins' && tileHash(Math.floor(box.cx) + 71, Math.floor(box.cy)) > 0.22) {
+      // Broken roof slabs, exposed seams and scattered debris make the rubble
+      // district look abandoned rather than like another intact concrete set.
+      const crackA = project(x0 + (x1 - x0) * 0.18, y0 + (y1 - y0) * 0.42, H + 1)
+      const crackB = project(x0 + (x1 - x0) * 0.43, y0 + (y1 - y0) * 0.56, H + 1)
+      const crackC = project(x0 + (x1 - x0) * 0.62, y0 + (y1 - y0) * 0.35, H + 1)
+      if (crackA && crackB && crackC) {
+        ctx.strokeStyle = withAlpha('#262326', 0.55)
+        ctx.lineWidth = 2
+        ctx.beginPath()
+        ctx.moveTo(crackA.x, crackA.y)
+        ctx.lineTo(crackB.x, crackB.y)
+        ctx.lineTo(crackC.x, crackC.y)
+        ctx.stroke()
+        ctx.fillStyle = surface(shade(r.buildingAlt, -8))
+        ctx.fillRect(crackB.x + 3, crackB.y - 3, 7, 3)
+      }
+    }
+
     // parapet ring
     ctx.strokeStyle = withAlpha(r.neon2, 0.4)
     ctx.lineWidth = 1.4
@@ -692,6 +994,8 @@ function drawBox(
     ctx.lineTo(t010.x, t010.y)
     ctx.closePath()
     ctx.stroke()
+  } else if (camZ > H) {
+    face([{ x: x0, y: y0, z: H }, { x: x1, y: y0, z: H }, { x: x1, y: y1, z: H }, { x: x0, y: y1, z: H }], roof)
   }
 }
 
@@ -706,9 +1010,9 @@ function windowGrid(
   seed: number,
   litColor: string,
   darkColor: string,
+  cols = 4,
 ) {
   const rows = Math.max(1, Math.round(height / 22))
-  const cols = 4
   const mx = 0.22 / cols
   const my = 0.18 / rows
   const at = (u: number, v: number): Pt => {
@@ -744,7 +1048,7 @@ function windowGrid(
 /* trees and bushes as real billboards, not circles                     */
 /* ------------------------------------------------------------------ */
 
-function drawTree3D(ctx: CanvasRenderingContext2D, lit: (hex: string) => string) {
+function drawTree3D(ctx: CanvasRenderingContext2D, lit: (hex: string) => string, conifer = false) {
   // trunk
   ctx.fillStyle = lit('#5b3d26')
   ctx.beginPath()
@@ -760,6 +1064,32 @@ function drawTree3D(ctx: CanvasRenderingContext2D, lit: (hex: string) => string)
   ctx.moveTo(0, -2)
   ctx.lineTo(0, -22)
   ctx.stroke()
+
+  if (conifer) {
+    // Layered pointed boughs make the forest skyline read as pine canopy,
+    // distinct from the round street trees in denser urban districts.
+    const tiers: Array<[number, number, number, string]> = [
+      [-48, 14, 0, '#1e5536'],
+      [-39, 19, 1, '#286d42'],
+      [-29, 24, 2, '#368754'],
+    ]
+    for (const [top, half, drift, color] of tiers) {
+      ctx.fillStyle = lit(color)
+      ctx.beginPath()
+      ctx.moveTo(drift, top)
+      ctx.lineTo(drift + half, top + half * 1.25)
+      ctx.lineTo(drift - half, top + half * 1.25)
+      ctx.closePath()
+      ctx.fill()
+      ctx.strokeStyle = lit('#7dba78')
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.moveTo(drift, top + 5)
+      ctx.lineTo(drift - half * 0.52, top + half * 0.92)
+      ctx.stroke()
+    }
+    return
+  }
 
   // canopy: stacked, shaded blobs, lighter at the top so it has volume
   const blobs: Array<[number, number, number, number]> = [

@@ -65,7 +65,7 @@ export interface ProfileSettings {
    */
   camera: CameraMode
   /**
-   * How the mouse turns the street camera: `drag` holds the right button and
+   * How the mouse turns the street camera: `drag` holds the left button and
    * sweeps, `free` follows every mouse move with no button at all, `off` leaves
    * looking to touch and the keyboard. Cosmetic on purpose, so like the camera
    * choice it is deliberately left OUT of the integrity fingerprint: changing
@@ -81,7 +81,7 @@ export function cleanCamera(v: unknown): CameraMode {
   return v === 'walk' ? 'walk' : 'top'
 }
 
-/** coerce anything into a valid look mode, defaulting to the right button drag */
+/** coerce anything into a valid look mode, defaulting to the left button drag */
 export function cleanLook(v: unknown): LookMode {
   return v === 'free' ? 'free' : v === 'off' ? 'off' : 'drag'
 }
