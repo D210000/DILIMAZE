@@ -104,6 +104,24 @@ export function TouchControls({ game, snap }: { game: Game; snap: Snapshot }) {
     startLoop()
   }
 
+  const playing = snap.status === 'playing'
+
+  // Clearing a city hides the pad before the browser is guaranteed to deliver
+  // pointerup. Drop the held touch immediately so its last vector cannot carry
+  // over into the clear screen or the next city.
+  useEffect(() => {
+    if (playing) return
+    activeRef.current = false
+    targetRef.current = { x: 0, y: 0 }
+    curRef.current = { x: 0, y: 0 }
+    if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    rafRef.current = 0
+    lastRef.current = 0
+    if (knobRef.current) knobRef.current.style.transform = 'translate(0px, 0px)'
+    game.setTouchAxis(0, 0)
+    game.setTouchRun(false)
+  }, [game, playing])
+
   useEffect(() => {
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current)
@@ -112,8 +130,6 @@ export function TouchControls({ game, snap }: { game: Game; snap: Snapshot }) {
       game.setTouchRun(false)
     }
   }, [game])
-
-  const playing = snap.status === 'playing'
 
   // fire on pointerdown OR touchstart so rapid taps never get dropped
   const btn = (action: Parameters<Game['action']>[0], label: string) => ({
