@@ -12,6 +12,8 @@ export function TouchControls({ game, snap }: { game: Game; snap: Snapshot }) {
   const knobRef = useRef<HTMLDivElement>(null)
   const padRef = useRef<HTMLDivElement>(null)
   const activeRef = useRef(false)
+  const pointerIdRef = useRef<number | null>(null)
+  const cityRef = useRef(snap.city)
   /** where the thumb is pointing, 0..1 in each axis (clamped to the unit disc) */
   const targetRef = useRef({ x: 0, y: 0 })
   /** what the game is actually being fed, eased toward the target each frame */
@@ -85,22 +87,31 @@ export function TouchControls({ game, snap }: { game: Game; snap: Snapshot }) {
   }
 
   const start = (e: React.PointerEvent) => {
+    if (pointerIdRef.current !== null && pointerIdRef.current !== e.pointerId) return
     activeRef.current = true
-    ;(e.target as HTMLElement).setPointerCapture?.(e.pointerId)
+    pointerIdRef.current = e.pointerId
+    padRef.current?.setPointerCapture?.(e.pointerId)
     readTarget(e.clientX, e.clientY)
     startLoop()
   }
 
   const move = (e: React.PointerEvent) => {
-    if (!activeRef.current) return
+    if (!activeRef.current || pointerIdRef.current !== e.pointerId) return
     e.preventDefault()
     readTarget(e.clientX, e.clientY)
     startLoop()
   }
 
-  const reset = () => {
+  const reset = (e?: React.PointerEvent) => {
+    if (e && pointerIdRef.current !== e.pointerId) return
+    const pointerId = pointerIdRef.current
+    pointerIdRef.current = null
     activeRef.current = false
     targetRef.current = { x: 0, y: 0 }
+    const pad = padRef.current
+    if (pointerId !== null && pad?.hasPointerCapture?.(pointerId)) {
+      pad.releasePointerCapture?.(pointerId)
+    }
     startLoop()
   }
 
@@ -110,17 +121,24 @@ export function TouchControls({ game, snap }: { game: Game; snap: Snapshot }) {
   // pointerup. Drop the held touch immediately so its last vector cannot carry
   // over into the clear screen or the next city.
   useEffect(() => {
-    if (playing) return
+    if (playing && cityRef.current === snap.city) return
+    cityRef.current = snap.city
+    const pointerId = pointerIdRef.current
+    pointerIdRef.current = null
     activeRef.current = false
     targetRef.current = { x: 0, y: 0 }
     curRef.current = { x: 0, y: 0 }
+    const pad = padRef.current
+    if (pointerId !== null && pad?.hasPointerCapture?.(pointerId)) {
+      pad.releasePointerCapture?.(pointerId)
+    }
     if (rafRef.current) cancelAnimationFrame(rafRef.current)
     rafRef.current = 0
     lastRef.current = 0
     if (knobRef.current) knobRef.current.style.transform = 'translate(0px, 0px)'
     game.setTouchAxis(0, 0)
     game.setTouchRun(false)
-  }, [game, playing])
+  }, [game, playing, snap.city])
 
   useEffect(() => {
     return () => {
@@ -153,6 +171,7 @@ export function TouchControls({ game, snap }: { game: Game; snap: Snapshot }) {
         onPointerMove={move}
         onPointerUp={reset}
         onPointerCancel={reset}
+        onLostPointerCapture={reset}
       >
         <div ref={knobRef} className="joy-knob" />
       </div>
