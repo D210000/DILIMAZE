@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { BRAND } from '../game/brand'
 import { REGIONS, regionIndexForCity } from '../game/city'
-import type { CameraMode, Profile } from '../game/profile'
+import { MAX_LIVES, recoverRunLives, type CameraMode, type Profile } from '../game/profile'
 import { fmtClock, loadRecords } from '../game/records'
 import { SkinPreview } from './Onboarding'
 
@@ -43,9 +43,21 @@ export function MainMenu({
   // read once per mount: this screen is remounted every time it is shown, so the
   // board is always fresh when the player returns from a run
   const [records] = useState(() => loadRecords())
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   const region = REGIONS[regionIndexForCity(profile.bestCity)]
   const run = profile.run
+  const recovered = run ? recoverRunLives(run, now) : null
+  const lives = recovered?.livesRemaining ?? MAX_LIVES
+  const recoveryMs = recovered && lives < MAX_LIVES && recovered.cooldownUntil > 0
+    ? Math.max(0, recovered.cooldownUntil - now)
+    : 0
+  const needsLife = !!run && lives === 0
+  const blockedFromContinue = needsLife && (run?.bankedLives ?? 0) === 0
   const timedCities = Object.keys(records.cities).length
   const bestRun = records.runs[0]
 
@@ -85,11 +97,21 @@ export function MainMenu({
           </div>
 
           <div className="menu-stack">
-            <button className="primary wide" onClick={onPlay}>
+            <button className="primary wide" onClick={onPlay} disabled={blockedFromContinue} title={blockedFromContinue ? 'Continue unlocks when one life recovers' : undefined}>
               {run ? 'Continue' : 'Play'}
             </button>
+            {run && recoveryMs > 0 && (
+              <p className="life-recovery-countdown" role="status">
+                {lives}/{MAX_LIVES} lives · {needsLife ? 'Continue in' : 'Next life in'} {fmtClock(Math.ceil(recoveryMs / 1000))}
+              </p>
+            )}
+            {run && run.bankedLives > 0 && (
+              <p className="life-recovery-countdown" role="status">
+                {run.bankedLives} reserve {run.bankedLives === 1 ? 'life' : 'lives'} available to use
+              </p>
+            )}
             {run && (
-              <button className="wide" onClick={onNewRun}>
+              <button className="wide" onClick={onNewRun} disabled={needsLife}>
                 Start new run
               </button>
             )}

@@ -645,8 +645,8 @@ function cityTypeTests(s: Suite): void {
   const rolesSeen = new Set<string>()
   for (let city = 11; city <= 100; city++) for (const g of generateCity(city).guards) rolesSeen.add(g.role)
   s.check(
-    'all six patrol roles appear across the run',
-    ['beat', 'long', 'wide', 'gun', 'tracker', 'charger'].every((r) => rolesSeen.has(r)),
+    'all seven patrol roles appear across the run',
+    ['beat', 'long', 'wide', 'gun', 'laser', 'tracker', 'charger'].every((r) => rolesSeen.has(r)),
     [...rolesSeen].sort().join(', '),
   )
   s.check(
@@ -911,9 +911,9 @@ function guardTests(s: Suite): void {
   const spawn = { x: game.world.spawn.x * TS, y: game.world.spawn.y * TS }
   for (let i = 0; i < 40 && game.status === 'caught'; i++) game.tick(0.1)
   s.check(
-    'being caught costs the day and returns you to the checkpoint',
-    game.status === 'playing' && Math.hypot(game.player.x - spawn.x, game.player.y - spawn.y) < 2,
-    `status "${game.status}"`,
+    'being caught costs a life and returns you to the checkpoint',
+    game.status === 'playing' && game.livesRemaining === 2 && Math.hypot(game.player.x - spawn.x, game.player.y - spawn.y) < 2,
+    `status "${game.status}", lives ${game.livesRemaining}`,
   )
 
   // hiding beats a cone
@@ -1313,7 +1313,7 @@ function renderTests(s: Suite): void {
 function profileTests(s: Suite): void {
   const p = freshProfile('Roundtrip')
   p.bestCity = 42
-  p.run = { city: 42, day: 3, daysInCity: 2, hunger: 55.5, thirst: 44.25, health: 91, coins: 137, food: 4, water: 5, clueIndex: 3 }
+  p.run = { city: 42, day: 3, daysInCity: 2, hunger: 55.5, thirst: 44.25, health: 91, coins: 137, food: 4, water: 5, clueIndex: 3, livesRemaining: 2, cooldownUntil: 0, bankedLives: 0 }
   p.stats = { attempts: 12, solves: 9, deaths: 2, citiesCleared: 41, timePlayedSec: 1234.5 }
   p.lore = { fringe: true, rustwater: true }
   p.settings = { sound: false, camera: 'walk', look: 'free' }
@@ -1343,7 +1343,7 @@ function profileTests(s: Suite): void {
   let sigOk = false
   try {
     const parsed = JSON.parse(raw ?? '{}') as { sig?: string; sigv?: number }
-    sigOk = typeof parsed.sig === 'string' && parsed.sig.length > 0 && parsed.sigv === 1
+    sigOk = typeof parsed.sig === 'string' && parsed.sig.length > 0 && parsed.sigv === 3
   } catch {
     sigOk = false
   }
@@ -1355,7 +1355,7 @@ function profileTests(s: Suite): void {
   const migrated = freshProfile('Veteran')
   migrated.bestCity = 21
   migrated.stats = { attempts: 2, solves: 7, deaths: 8, citiesCleared: 1, timePlayedSec: 2700 }
-  migrated.run = { ...migrated.run, ...{ city: 21, day: 1, daysInCity: 1, hunger: 94, thirst: 91, health: 100, coins: 28, food: 1, water: 1, clueIndex: 0 } }
+  migrated.run = { ...migrated.run, ...{ city: 21, day: 1, daysInCity: 1, hunger: 94, thirst: 91, health: 100, coins: 28, food: 1, water: 1, clueIndex: 0, livesRemaining: 3, cooldownUntil: 0, bankedLives: 0 } }
   migrated.lore = { fringe: true }
   migrated.onboarded = true
   saveProfile(migrated)

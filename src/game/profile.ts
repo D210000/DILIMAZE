@@ -18,6 +18,7 @@ import { REGIONS } from './city'
  */
 
 export const PROFILE_KEY = 'borderrun_profile'
+export const MAX_LIVES = 3
 /** old pre-profile save key, migrated into the profile on first load */
 const LEGACY_KEY = 'border-run-save-v1'
 
@@ -29,7 +30,7 @@ const MAX_SAVE_CHARS = 64 * 1024
  * fingerprint are treated as legacy (accepted and re-signed) rather than
  * tampered, so future format changes never wipe real progress.
  */
-const SIG_VERSION = 1
+const SIG_VERSION = 3
 const SIG_SALT = 'dilimaze.cities.v1'
 
 export interface RunState {
@@ -43,6 +44,23 @@ export interface RunState {
   food: number
   water: number
   clueIndex: number
+  livesRemaining: number
+  cooldownUntil: number
+  /** collectible lives saved for later runs; separate from the city's lives */
+  bankedLives: number
+}
+
+/** One life returns per city-minute while the runner is below capacity. */
+export function recoverRunLives(run: Pick<RunState, 'city' | 'livesRemaining' | 'cooldownUntil'>, now = Date.now()) {
+  let livesRemaining = int(run.livesRemaining, 0, MAX_LIVES, 3)
+  let cooldownUntil = int(run.cooldownUntil, 0, Number.MAX_SAFE_INTEGER, 0)
+  const interval = Math.max(1, Math.round(run.city)) * 60_000
+  while (livesRemaining < MAX_LIVES && cooldownUntil > 0 && cooldownUntil <= now) {
+    livesRemaining++
+    cooldownUntil = livesRemaining < MAX_LIVES ? cooldownUntil + interval : 0
+  }
+  if (livesRemaining >= MAX_LIVES) cooldownUntil = 0
+  return { livesRemaining, cooldownUntil }
 }
 
 export interface ProfileStats {
@@ -175,7 +193,7 @@ function cleanLore(raw: unknown): Record<string, boolean> {
 }
 
 export function freshRun(city = 1): RunState {
-  return { city, day: 1, daysInCity: 1, hunger: 100, thirst: 100, health: 100, coins: 10, food: 1, water: 1, clueIndex: 0 }
+  return { city, day: 1, daysInCity: 1, hunger: 100, thirst: 100, health: 100, coins: 10, food: 1, water: 1, clueIndex: 0, livesRemaining: 3, cooldownUntil: 0, bankedLives: 0 }
 }
 
 export function freshProfile(name = 'Runner', skin = DEFAULT_SKIN_ID): Profile {
@@ -223,6 +241,9 @@ function fingerprint(p: Profile): string {
           p.run.food,
           p.run.water,
           p.run.clueIndex,
+          p.run.livesRemaining,
+          p.run.cooldownUntil,
+          p.run.bankedLives,
         ].join(',')
       : '-',
     [
@@ -284,6 +305,9 @@ function normalize(p: Profile): Profile {
       food: int(p.run.food, 0, 99, 1),
       water: int(p.run.water, 0, 99, 1),
       clueIndex: int(p.run.clueIndex, 0, 9, 0),
+      livesRemaining: int(p.run.livesRemaining, 0, MAX_LIVES, 3),
+      cooldownUntil: int(p.run.cooldownUntil, 0, Number.MAX_SAFE_INTEGER, 0),
+      bankedLives: int(p.run.bankedLives, 0, 99999, 0),
     }
   } else {
     p.run = null
@@ -334,6 +358,9 @@ function sanitize(raw: unknown): Profile | null {
           food: clampNum(run.food, 0, 99, 1),
           water: clampNum(run.water, 0, 99, 1),
           clueIndex: clampNum(run.clueIndex, 0, 9, 0),
+          livesRemaining: clampNum(run.livesRemaining, 0, MAX_LIVES, 3),
+          cooldownUntil: clampNum(run.cooldownUntil, 0, Number.MAX_SAFE_INTEGER, 0),
+          bankedLives: clampNum(run.bankedLives, 0, 99999, 0),
         }
       : null,
     stats: {

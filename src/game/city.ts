@@ -592,11 +592,11 @@ export function guardRankName(gd: { tier: number; captain: boolean }): string {
 }
 
 // More guards, wider cones and longer legs the further east you get. The patrol
-// count climbs a step every four cities up to a dozen, and the per city speed
+// count climbs a step every four cities up to fifteen, and the per city speed
 // rises too, but both stay below the runner's sprint: a chase is always
 // answerable with a run or a hiding spot, never a hopeless footrace.
 function guardSpec(city: number): { n: number; dist: number; half: number; speed: number; tier: number } {
-  const n = Math.min(12, 2 + Math.floor((city - 1) / 4))
+  const n = Math.min(15, 3 + Math.floor((city - 1) / 4))
   const dist = Math.min(10, 4.4 + city * 0.056)
   const half = Math.min(0.66, 0.4 + city * 0.0026)
   const speed = Math.min(4.7, 1.5 + city * 0.032)
@@ -629,6 +629,7 @@ const ROLE_TRAITS: Record<GuardRole, { dist: number; half: number; speed: number
   long: { dist: 1.5, half: 0.72, speed: 0.92 },
   wide: { dist: 0.8, half: 1.6, speed: 0.96 },
   gun: { dist: 1.25, half: 0.9, speed: 0.95 },
+  laser: { dist: 1.25, half: 0.82, speed: 0.86 },
   charger: { dist: 0.92, half: 0.88, speed: 1.02 },
   tracker: { dist: 1.15, half: 0.9, speed: 0.94 },
 }
@@ -1153,6 +1154,21 @@ export function generateCity(city: number, opts: { skipSolvabilityGuard?: boolea
     if (s) addProp('fence', s.x, s.y, { climbable: true })
   }
 
+  // Life crates are rare supplies: early cities can hold up to four, mid-run
+  // cities up to two, and deep cities only one. The chance also falls by level,
+  // so some cities have no life crate at all.
+  const lifeLoot = new RNG(city * 7919 + 104729)
+  const lifeCrateChance = Math.max(0.12, 0.72 - city * 0.012)
+  const maxLifeCratesPerCity = 4
+  const lifeCrateMax = Math.min(maxLifeCratesPerCity, city <= 20 ? 4 : city <= 50 ? 2 : 1)
+  if (lifeLoot.chance(lifeCrateChance)) {
+    const count = lifeLoot.int(1, lifeCrateMax)
+    for (let i = 0; i < count; i++) {
+      const spot = takeSpot()
+      addProp('crate', spot.x, spot.y, { climbable: true, data: 'life' })
+    }
+  }
+
   // spawn: left edge; gate: right edge, carve a road to it
   const spawn = { x: 1.5, y: gateRow + 0.5 }
   const gateY = gateRow
@@ -1315,7 +1331,9 @@ export function generateCity(city: number, opts: { skipSolvabilityGuard?: boolea
     if (path.length === 0) path.push({ x: cx + 0.5, y: cy + 0.5 })      // the role bends the eyes and legs before the captain bonus is layered on,
       // and the result is capped just under the runner's sprint (5.6 tiles/s)
       // even through the night bonus, so nobody can be outrun only by running.
-      const role = guardRoleFor(city, i)
+      // High lockdown cities field two oversized laser captains among the
+      // regular elite patrol mix, so players can read and plan around them.
+      const role: GuardRole = city >= 50 && captain && i % 12 === 2 ? 'laser' : guardRoleFor(city, i)
       const traits = ROLE_TRAITS[role]
       const speed = Math.min(4.9, spec.speed * traits.speed * (captain ? 1.12 : 1))
       guards.push({
@@ -1331,7 +1349,10 @@ export function generateCity(city: number, opts: { skipSolvabilityGuard?: boolea
       dir: rng.float(0, Math.PI * 2),
       lastSeen: null,
       searchTimer: 0,
-      visionDist: Math.min(13 * TS, spec.dist * traits.dist * TS * (captain ? 1.08 : 1)),
+      visionDist: Math.min(
+        role === 'gun' || role === 'laser' ? 18 * TS : 13 * TS,
+        spec.dist * traits.dist * TS * (captain ? 1.08 : 1) * (role === 'laser' ? 1.55 : role === 'gun' ? 1.35 : 1),
+      ),
       visionHalfAngle: Math.min(1.1, spec.half * traits.half * (captain ? 1.06 : 1)),
       stuckTimer: 0,
       detourPath: [],
@@ -1434,7 +1455,11 @@ export function generateCity(city: number, opts: { skipSolvabilityGuard?: boolea
     guards,
     region: paletteForCity(city),
     archetype: type,
-    dayLengthSec: Math.max(150, 240 - city),
+    // A full 24-hour game day is 30 real seconds: 15 seconds of daylight,
+    // followed by 15 seconds of dusk, night, and dawn. Survival drain below
+    // remains expressed per in-game hour, so each complete day applies the
+    // same hunger and thirst cost regardless of frame rate.
+    dayLengthSec: 30,
     drainPerHour: { hunger: 0.9 * drainBase, thirst: 1.35 * drainBase },
     freeFood: props.filter((p) => p.data === 'food').length,
     freeWater: props.filter((p) => p.data === 'water').length,

@@ -1157,6 +1157,14 @@ button.wide {
   border-radius: 10px;
 }
 
+.menu-actions {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+
 .overlay.lore .panel::before {
   background: linear-gradient(90deg, transparent, var(--gold), transparent);
 }
@@ -1300,6 +1308,14 @@ button.wide {
   margin: 0;
   font-size: 18px;
   padding: 14px 20px;
+}
+
+.life-recovery-countdown {
+  color: var(--good);
+  font-size: 13px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 10px rgba(109, 255, 190, 0.3);
 }
 
 .menu-grid {
@@ -1715,6 +1731,253 @@ button.wide {
   }
 }
 
+/* Keep the two navigation icons together at every viewport width. */
+.top-chips {
+  flex-direction: row;
+}
+
+.hud-top-right {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  backdrop-filter: none;
+}
+
+/* Keep navigation immediately beneath the city and clue labels. */
+.top-chips {
+  top: calc(max(12px, env(safe-area-inset-top)) + 42px);
+  left: max(14px, env(safe-area-inset-left));
+  right: auto;
+  transform: none;
+  flex-direction: row;
+  gap: 6px;
+}
+
+.exit-chip,
+.camera-chip {
+  width: 38px;
+  height: 38px;
+  padding: 0;
+}
+
+.exit-chip img {
+  display: block;
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+}
+
+.camera-chip {
+  font-family: var(--font-display);
+  font-size: 13px;
+  letter-spacing: 0.3px;
+}
+
+/* The centered timer owns the middle; keep the compact meters to its right. */
+.hud-top-right {
+  top: max(12px, env(safe-area-inset-top));
+  right: max(12px, env(safe-area-inset-right));
+  width: min(270px, 38vw);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  backdrop-filter: none;
+}
+
+@media (max-width: 700px) {
+  .hud-top-right {
+    width: min(168px, 38vw);
+    gap: 2px 4px;
+  }
+
+  .hud-top-right .stat {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    gap: 1px;
+  }
+
+  .hud-top-right .stat-label {
+    white-space: nowrap;
+    font-size: 7px;
+  }
+
+  .hud-top-right .stat-value {
+    font-size: 8px;
+  }
+
+  .hud-top-right .stat-bar {
+    grid-column: 1;
+    height: 4px;
+  }
+
+  .hud-top-right .inv {
+    font-size: 9px;
+  }
+}
+
+@media (max-width: 370px) {
+  .hud-top-right {
+    width: min(136px, 38vw);
+  }
+
+  .hud-top-right .stat-label {
+    font-size: 6px;
+    letter-spacing: 0;
+  }
+
+  .hud-top-right .stat-value {
+    font-size: 7px;
+  }
+}
+
+.exit-chip svg {
+  display: block;
+  width: 22px;
+  height: 22px;
+  color: var(--cyan);
+}
+
+/* Keep the rotating locator arrow and remove the clue distance pill. */
+.tracker {
+  gap: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.tracker-arrow {
+  font-size: 24px;
+  color: var(--gold);
+  text-shadow: 0 0 12px rgba(255, 210, 74, 0.9);
+}
+
+/* Show all three needs as a compact horizontal percentage row. */
+.hud-top-right {
+  top: max(12px, env(safe-area-inset-top));
+  width: min(270px, 38vw);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  backdrop-filter: none;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px 8px;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.95);
+}
+
+.hud-top-right .stat {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 2px 4px;
+  font-size: 9px;
+  letter-spacing: 0.3px;
+}
+
+.hud-top-right .stat-label {
+  width: auto;
+  text-align: left;
+  font-size: inherit;
+}
+
+.stat-value {
+  color: #fff;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.hud-top-right .stat-bar {
+  grid-column: 1 / -1;
+  width: 100%;
+  height: 5px;
+}
+
+.hud-top-right .inv {
+  grid-column: 1 / -1;
+  margin-top: 0;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.hud-top-right .life-meter {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 2px;
+  min-height: 27px;
+  margin-top: 1px;
+  background: transparent;
+}
+
+.reserve-life-count {
+  color: var(--cyan);
+  font-size: 10px;
+  font-weight: 800;
+  margin-left: 3px;
+  text-shadow: 0 1px 5px rgba(0, 0, 0, 0.8);
+}
+
+.life-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 27px;
+}
+
+.life-icon canvas {
+  display: block;
+  width: 26px;
+  height: 26px;
+}
+
+.life-icon.spent canvas {
+  filter: drop-shadow(0 0 3px rgba(255, 75, 100, .35));
+}
+
+@media (max-width: 700px) {
+  .hud-top-right {
+    top: max(42px, env(safe-area-inset-top) + 34px);
+    width: min(240px, 56vw);
+    gap: 3px 5px;
+  }
+
+  .hud-top-right .stat {
+    font-size: 8px;
+    gap: 1px 3px;
+  }
+
+  .stat-value {
+    font-size: 8px;
+  }
+
+  .hud-top-right .inv {
+    font-size: 9px;
+  }
+}
+
+@media (max-width: 370px) {
+  .hud-top-right {
+    width: 54vw;
+    gap: 2px 3px;
+  }
+
+  .hud-top-right .stat,
+  .stat-value {
+    font-size: 7px;
+  }
+
+  .hud-top-right .stat-label {
+    letter-spacing: 0;
+  }
+}
+
 /* A narrow desktop/browser viewport still needs a visible way to move: hide
    touch controls only when there is room for the full desktop layout. */
 @media (hover: hover) and (pointer: fine) and (min-width: 701px) {
@@ -1868,6 +2131,74 @@ button:focus-visible {
   color: #fff;
 }
 
+/* Keep the in-game navigation out of the centered HUD and within thumb reach. */
+.top-chips {
+  top: calc(max(12px, env(safe-area-inset-top)) + 104px);
+  left: max(12px, env(safe-area-inset-left));
+  right: auto;
+  transform: none;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.exit-chip,
+.camera-chip {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border-radius: 12px;
+  font-family: system-ui, sans-serif;
+  font-size: 21px;
+  line-height: 1;
+  letter-spacing: 0;
+  opacity: 0.82;
+}
+
+/* Scale touch targets against both viewport dimensions so short and narrow
+   screens keep the stick and action grid inside the visible play area. */
+.joy-pad {
+  width: clamp(88px, min(28vw, 24vh), 142px);
+  height: clamp(88px, min(28vw, 24vh), 142px);
+  left: max(12px, env(safe-area-inset-left) + 6px);
+  bottom: max(16px, env(safe-area-inset-bottom) + 10px);
+}
+
+.touch-btns {
+  right: max(12px, env(safe-area-inset-right) + 6px);
+  bottom: max(14px, env(safe-area-inset-bottom) + 8px);
+  grid-template-columns: repeat(3, clamp(44px, min(14vw, 9vh), 68px));
+  gap: clamp(4px, 1.5vw, 8px);
+}
+
+.touch-btns button.touch-action {
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+  border-radius: clamp(11px, 3vw, 18px);
+}
+
+@media (max-height: 480px) and (orientation: landscape) {
+  .top-chips {
+    top: calc(max(5px, env(safe-area-inset-top)) + 48px);
+    flex-direction: row;
+  }
+
+  .hud-bottom-left {
+    bottom: max(84px, env(safe-area-inset-bottom) + 72px);
+  }
+}
+
+@media (max-width: 700px) and (orientation: portrait) {
+  /* Lift the clue readout above the joystick and action grid. */
+  .hud-bottom-left {
+    bottom: max(110px, env(safe-area-inset-bottom) + clamp(88px, min(28vw, 24vh), 142px) + 56px);
+  }
+}
+
 @media (max-width: 700px) {
   .hud-top-left {
     max-width: calc(100vw - 180px);
@@ -1903,13 +2234,13 @@ button:focus-visible {
 
 @media (max-height: 480px) and (orientation: landscape) {
   .joy-pad {
-    width: 100px;
-    height: 100px;
+    width: clamp(76px, min(18vw, 24vh), 110px);
+    height: clamp(76px, min(18vw, 24vh), 110px);
     bottom: max(12px, env(safe-area-inset-bottom) + 8px);
   }
 
   .touch-btns {
-    grid-template-columns: repeat(3, 52px);
+    grid-template-columns: repeat(3, clamp(40px, min(9vw, 15vh), 52px));
     gap: 5px;
     bottom: max(8px, env(safe-area-inset-bottom) + 4px);
   }
@@ -2127,5 +2458,214 @@ button:focus-visible {
 
   .tutorial-panel {
     padding: 16px 16px 14px;
+  }
+}
+
+/* Compact, transparent in-game HUD. */
+.hud-top-left {
+  top: max(12px, env(safe-area-inset-top));
+  left: max(14px, env(safe-area-inset-left));
+  width: max-content;
+  max-width: calc(100vw - 180px);
+  padding: 0;
+  background: none;
+  backdrop-filter: none;
+}
+
+.hud-title {
+  font-size: clamp(17px, 4.5vw, 24px);
+  line-height: 1.1;
+  letter-spacing: 0.8px;
+  white-space: nowrap;
+}
+
+.hud-bottom-left {
+  position: static;
+  max-width: 100%;
+  margin-top: 3px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  backdrop-filter: none;
+  pointer-events: none;
+}
+
+.hud-bottom-left.open {
+  background: none;
+  backdrop-filter: none;
+}
+
+.clue-bar {
+  display: block;
+}
+
+.clue-count {
+  display: inline-block;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--cyan);
+  font-family: var(--font-display);
+  font-size: 13px;
+  letter-spacing: 1.2px;
+  line-height: 1.2;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.95);
+  pointer-events: auto;
+}
+
+.clue-count:disabled {
+  opacity: 1;
+}
+
+.clue-detail {
+  max-width: min(44vw, 340px);
+  margin-top: 4px;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.95);
+}
+
+.clue-hint {
+  max-width: 100%;
+}
+
+.hud-timer {
+  position: absolute;
+  top: max(4px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  color: #fff;
+  font-family: var(--font-display);
+  font-size: clamp(13px, 3.5vw, 18px);
+  letter-spacing: 1px;
+  text-shadow: 0 1px 5px rgba(0, 0, 0, 0.95);
+  z-index: 6;
+}
+
+.hud-alerts {
+  position: absolute;
+  bottom: max(150px, env(safe-area-inset-bottom) + 138px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: min(90vw, 460px);
+  text-align: center;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.95);
+  pointer-events: none;
+}
+
+@media (max-width: 520px) {
+  .hud-top-left {
+    max-width: calc(100vw - 160px);
+  }
+
+  .hud-title {
+    font-size: 16px;
+  }
+
+  .clue-detail {
+    max-width: min(48vw, 240px);
+  }
+}
+
+/* This final responsive override keeps Menu and camera controls side by side. */
+.top-chips {
+  flex-direction: row;
+}
+
+/* Strip the earlier mobile scrim from the new horizontal status row. */
+.hud-top-right {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  backdrop-filter: none;
+}
+
+/* Final HUD positions apply after every legacy breakpoint rule above. */
+.top-chips {
+  top: calc(max(12px, env(safe-area-inset-top)) + 52px);
+  left: max(14px, env(safe-area-inset-left));
+  right: auto;
+  transform: none;
+  flex-direction: row;
+  gap: 6px;
+}
+
+.exit-chip,
+.camera-chip {
+  width: 38px;
+  height: 38px;
+  padding: 0;
+}
+
+.exit-chip img {
+  display: block;
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+}
+
+.camera-chip {
+  font-family: var(--font-display);
+  font-size: 13px;
+  letter-spacing: 0.3px;
+}
+
+.hud-top-right {
+  top: max(12px, env(safe-area-inset-top));
+  right: max(12px, env(safe-area-inset-right));
+  width: min(270px, 38vw);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  backdrop-filter: none;
+}
+
+@media (max-width: 700px) {
+  .hud-top-right {
+    width: min(168px, 38vw);
+    gap: 2px 4px;
+  }
+
+  .hud-top-right .stat {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    gap: 1px;
+  }
+
+  .hud-top-right .stat-label {
+    white-space: nowrap;
+    font-size: 7px;
+  }
+
+  .hud-top-right .stat-value {
+    font-size: 8px;
+  }
+
+  .hud-top-right .stat-bar {
+    grid-column: 1;
+    height: 4px;
+  }
+
+  .hud-top-right .inv {
+    font-size: 9px;
+  }
+}
+
+@media (max-width: 370px) {
+  .hud-top-right {
+    width: min(136px, 38vw);
+  }
+
+  .hud-top-right .stat-label {
+    font-size: 6px;
+    letter-spacing: 0;
+  }
+
+  .hud-top-right .stat-value {
+    font-size: 7px;
   }
 }

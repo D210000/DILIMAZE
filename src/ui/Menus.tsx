@@ -6,9 +6,10 @@ interface MenusProps {
   snap: Snapshot
   gameRef: React.RefObject<Game | null>
   onNew: () => void
+  onHome: () => void
 }
 
-export function Menus({ snap, gameRef, onNew }: MenusProps) {
+export function Menus({ snap, gameRef, onNew, onHome }: MenusProps) {
   const g = gameRef.current!
   const [wordAnswer, setWordAnswer] = useState('')
   const [codeAnswer, setCodeAnswer] = useState('')
@@ -146,7 +147,7 @@ export function Menus({ snap, gameRef, onNew }: MenusProps) {
         <div className="panel">
           <h2>🚨 CAUGHT!</h2>
           <p>They searched you and sent you back.</p>
-          <p className="hint">Lose coins, food... and time.</p>
+          <p className="hint">Life lost · {snap.livesRemaining} of 3 remaining</p>
         </div>
       </div>
     )
@@ -158,7 +159,35 @@ export function Menus({ snap, gameRef, onNew }: MenusProps) {
         <div className="panel">
           <h2>💀 COLLAPSED</h2>
           <p>{snap.deathReason || 'Your body gave out.'}</p>
-          <p className="hint">Restarting City {snap.city} from Day 1...</p>
+          <p className="hint">{snap.livesRemaining > 0 ? `Lives left: ${snap.livesRemaining}. Restarting City ${snap.city}...` : 'Final life lost.'}</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (snap.status === 'cooldown') {
+    const seconds = Math.ceil(snap.cooldownRemainingMs / 1000)
+    const time = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+    return (
+      <div className="overlay red">
+        <div className="panel">
+          <h2>💀 OUT OF LIVES</h2>
+          <p>Use reserve lives now, or wait for one to recover.</p>
+          <p className="hint">One life in {time}</p>
+          {snap.bankedLives > 0 && (
+            <>
+              <p className="hint">Reserve lives: {snap.bankedLives}</p>
+              <div className="menu-actions">
+                <button className="primary" onClick={() => g.useReserveLives(1)}>USE 1 LIFE</button>
+                {snap.bankedLives >= 2 && (
+                  <button className="primary" onClick={() => g.useReserveLives(3)}>
+                    USE {Math.min(3, snap.bankedLives)} LIVES
+                  </button>
+                )}
+              </div>
+            </>
+          )}
+          <button className="primary" onClick={onHome}>RETURN TO MENU</button>
         </div>
       </div>
     )

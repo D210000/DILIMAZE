@@ -69,9 +69,10 @@ export interface Clue {
  *  - `beat` — a brawler, quick on its feet, normal stare;
  *  - `long` — a watcher with a narrow stare that reaches a long way down a street;
  *  - `wide` — a watcher that sweeps most of a corner at once;
- *  - `gun`  — a shooter: holds its ground and fires down the cone from range.
+ *  - `gun`  — a shooter: holds its ground and fires down the cone from range;
+ *  - `laser` — a heavy captain: fires a high-damage beam across a long sightline.
  */
-export type GuardRole = 'beat' | 'long' | 'wide' | 'gun' | 'charger' | 'tracker'
+export type GuardRole = 'beat' | 'long' | 'wide' | 'gun' | 'laser' | 'charger' | 'tracker'
 
 export interface Guard {
   id: number
@@ -213,6 +214,7 @@ export type GameStatus =
   | 'puzzle'
   | 'caught'
   | 'collapsed'
+  | 'cooldown'
   | 'cityCleared'
   | 'victory'
 

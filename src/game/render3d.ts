@@ -607,6 +607,9 @@ export function render3D(ctx: CanvasRenderingContext2D, game: Game, viewW: numbe
     const pt = project(gd.x, gd.y, 0)
     if (!pt || pt.depth > mapReach || pt.depth <= NEAR * 1.5) continue
     const scale = Math.min(9, pt.s)
+    const laserTarget = gd.role === 'laser' && gd.flash > 0 && gd.shotAt
+      ? project(gd.shotAt.x, gd.shotAt.y, 0)
+      : null
     items.push({
       d: pt.depth,
       draw: () => {
@@ -615,6 +618,19 @@ export function render3D(ctx: CanvasRenderingContext2D, game: Game, viewW: numbe
         ctx.scale(scale, scale)
         drawGuard(ctx, { ...gd, x: 0, y: 0 } as Guard, r)
         ctx.restore()
+        if (laserTarget) {
+          ctx.save()
+          ctx.globalAlpha = Math.min(1, gd.flash / 0.34)
+          ctx.strokeStyle = '#ff43e8'
+          ctx.shadowColor = '#ff28e7'
+          ctx.shadowBlur = 18
+          ctx.lineWidth = Math.max(2, scale * 0.72)
+          ctx.beginPath()
+          ctx.moveTo(pt.x, pt.y - scale * 12)
+          ctx.lineTo(laserTarget.x, laserTarget.y)
+          ctx.stroke()
+          ctx.restore()
+        }
       },
     })
   }

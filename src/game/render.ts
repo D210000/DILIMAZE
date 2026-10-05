@@ -630,6 +630,9 @@ export function drawProp(ctx: CanvasRenderingContext2D, pr: Prop, world: World) 
   if (isClue) {
     ctx.shadowColor = C.gold
     ctx.shadowBlur = 14
+  } else if (pr.data === 'life' && !pr.used) {
+    ctx.shadowColor = C.good
+    ctx.shadowBlur = 16
   } else if (pr.kind === 'coin') {
     ctx.shadowColor = C.gold
     ctx.shadowBlur = 12
@@ -724,16 +727,24 @@ export function drawProp(ctx: CanvasRenderingContext2D, pr: Prop, world: World) 
     }
     case 'crate': {
       // climbable cover: a chunky braced box
-      prism(ctx, x, y + 5, 20, 8, 10, '#8d68ad', '#5a3f78')
-      ctx.strokeStyle = r.neon
+      const lifeCrate = pr.data === 'life'
+      const crateFace = lifeCrate ? (pr.used ? '#4d5d65' : '#397d72') : '#8d68ad'
+      prism(ctx, x, y + 5, 20, 8, 10, crateFace, lifeCrate ? '#225047' : '#5a3f78')
+      ctx.strokeStyle = lifeCrate ? (pr.used ? '#829094' : C.good) : r.neon
       ctx.lineWidth = 1.5
       ctx.strokeRect(x - 10, y - 5, 20, 10)
-      ctx.beginPath()
-      ctx.moveTo(x - 10, y - 5)
-      ctx.lineTo(x + 10, y + 5)
-      ctx.moveTo(x + 10, y - 5)
-      ctx.lineTo(x - 10, y + 5)
-      ctx.stroke()
+      if (lifeCrate && !pr.used) {
+        ctx.fillStyle = C.good
+        ctx.fillRect(x - 1.5, y - 4, 3, 8)
+        ctx.fillRect(x - 4, y - 1.5, 8, 3)
+      } else {
+        ctx.beginPath()
+        ctx.moveTo(x - 10, y - 5)
+        ctx.lineTo(x + 10, y + 5)
+        ctx.moveTo(x + 10, y - 5)
+        ctx.lineTo(x - 10, y + 5)
+        ctx.stroke()
+      }
       break
     }
     case 'fence':
@@ -935,6 +946,7 @@ function drawShutHouse(ctx: CanvasRenderingContext2D, x: number, y: number) {
 }
 
 const INTERACTIVE = new Set([
+  'crate',
   'fountain',
   'bench',
   'shop',
@@ -1098,10 +1110,12 @@ export function drawGuard(ctx: CanvasRenderingContext2D, gd: Guard, r: Region) {
   const uneasy = !chasing && gd.alert > 0.4
   const art = GUARD_ART[Math.max(0, Math.min(GUARD_ART.length - 1, gd.tier))]
   // every tier stands taller and wider, and a captain a step further again
-  const s = 1 + gd.tier * 0.07 + (gd.captain ? 0.07 : 0)
+  const s = (1 + gd.tier * 0.07 + (gd.captain ? 0.07 : 0)) * (gd.role === 'laser' ? 1.18 : 1)
   const standing = gd.state === 'search' || gd.state === 'suspicious'
   const step = standing ? 0 : Math.sin(performance.now() / 170 + gd.id * 1.9)
-  const glow = gd.role === 'charger' && gd.burstTimer > 0
+  const glow = gd.role === 'laser'
+    ? '#ff43e8'
+    : gd.role === 'charger' && gd.burstTimer > 0
     ? '#ffb24a'
     : gd.role === 'tracker' && !chasing
       ? '#61f2dc'
@@ -1233,17 +1247,20 @@ export function drawGuard(ctx: CanvasRenderingContext2D, gd: Guard, r: Region) {
   ctx.stroke()
 
   /* ---- role gear: what a patrol does is visible before it sees you ---- */
-  if (gd.role === 'gun') {
+  if (gd.role === 'gun' || gd.role === 'laser') {
     // a drawn weapon along the facing line, with the muzzle lamp lit
     ctx.save()
     ctx.translate(gd.x, hip)
     ctx.rotate(gd.dir)
-    ctx.fillStyle = '#171b2b'
-    ctx.fillRect(3, -1.7, 12, 3.4)
+    ctx.fillStyle = gd.role === 'laser' ? '#32123d' : '#171b2b'
+    ctx.fillRect(3, gd.role === 'laser' ? -2.5 : -1.7, gd.role === 'laser' ? 16 : 12, gd.role === 'laser' ? 5 : 3.4)
     ctx.fillStyle = art.plate
     ctx.fillRect(5, -2.6, 4, 1.6)
-    ctx.fillStyle = withAlpha(gd.flash > 0 ? '#fff0c0' : art.visor, 0.95)
-    ctx.fillRect(13, -1.1, 3.2, 2.2)
+    ctx.fillStyle = withAlpha(gd.flash > 0 ? (gd.role === 'laser' ? '#fff3ff' : '#fff0c0') : glow, 0.95)
+    ctx.shadowColor = glow
+    ctx.shadowBlur = gd.role === 'laser' ? 12 : 0
+    ctx.fillRect(gd.role === 'laser' ? 17 : 13, -1.4, 3.2, 2.8)
+    ctx.shadowBlur = 0
     ctx.restore()
   } else if (gd.role === 'long') {
     // a lantern raised on a pole: the long, narrow stare, made obvious
@@ -1307,22 +1324,23 @@ export function drawGuard(ctx: CanvasRenderingContext2D, gd: Guard, r: Region) {
 function drawShots(ctx: CanvasRenderingContext2D, world: World) {
   for (const gd of world.guards) {
     if (gd.flash <= 0 || !gd.shotAt) continue
-    const a = Math.min(1, gd.flash / 0.18)
+    const duration = gd.role === 'laser' ? 0.34 : 0.18
+    const a = Math.min(1, gd.flash / duration)
     const s = 1 + gd.tier * 0.07 + (gd.captain ? 0.07 : 0)
     const hip = gd.y + 9 * s - 6.5 * s
     const bx = gd.x + Math.cos(gd.dir) * 13
     const by = hip + Math.sin(gd.dir) * 13
     ctx.save()
     ctx.globalAlpha = a
-    ctx.strokeStyle = '#ffd7a8'
-    ctx.shadowColor = '#ff5c5c'
-    ctx.shadowBlur = 14
-    ctx.lineWidth = 2.2
+    ctx.strokeStyle = gd.role === 'laser' ? '#ffd8ff' : '#ffd7a8'
+    ctx.shadowColor = gd.role === 'laser' ? '#ff28e7' : '#ff5c5c'
+    ctx.shadowBlur = gd.role === 'laser' ? 22 : 14
+    ctx.lineWidth = gd.role === 'laser' ? 4 : 2.2
     ctx.beginPath()
     ctx.moveTo(bx, by)
     ctx.lineTo(gd.shotAt.x, gd.shotAt.y)
     ctx.stroke()
-    ctx.fillStyle = '#fff2cc'
+    ctx.fillStyle = gd.role === 'laser' ? '#fff2ff' : '#fff2cc'
     ctx.beginPath()
     ctx.arc(bx, by, 4.5 * a + 1, 0, Math.PI * 2)
     ctx.fill()
@@ -1333,8 +1351,8 @@ function drawShots(ctx: CanvasRenderingContext2D, world: World) {
 function drawGuardCones(ctx: CanvasRenderingContext2D, world: World) {
   for (const gd of world.guards) {
     const chasing = gd.state === 'chase'
-    const base = chasing ? [255, 60, 60] : gd.alert > 0.4 ? [255, 160, 60] : [255, 120, 120]
-    const alpha = chasing ? 0.34 : gd.alert > 0.4 ? 0.26 : 0.17
+    const base = gd.role === 'laser' ? [255, 55, 235] : chasing ? [255, 60, 60] : gd.alert > 0.4 ? [255, 160, 60] : [255, 120, 120]
+    const alpha = gd.role === 'laser' ? 0.24 : chasing ? 0.34 : gd.alert > 0.4 ? 0.26 : 0.17
 
     const grad = ctx.createRadialGradient(gd.x, gd.y, 4, gd.x, gd.y, gd.visionDist)
     grad.addColorStop(0, `rgba(${base[0]},${base[1]},${base[2]},${alpha + 0.1})`)

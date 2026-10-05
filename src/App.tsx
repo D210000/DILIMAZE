@@ -319,8 +319,13 @@ export default function App() {
     (city: number, fresh = false) => {
       const prof = profileRef.current
       if (!prof) return
-      const target = Math.max(1, Math.min(100, Math.round(city)))
-      const resume = !fresh && prof.run && prof.run.city === target ? prof.run : null
+      const requestedCity = Math.max(1, Math.min(100, Math.round(city)))
+      // Keep the runner in the recovery screen until the lockout expires; neither
+      // a fresh start nor selecting another unlocked city can skip the wait.
+      const lockedRun = prof.run && (prof.run.cooldownUntil ?? 0) > Date.now() ? prof.run : null
+      const target = lockedRun?.city ?? requestedCity
+      const sameCityRun = prof.run?.city === target ? prof.run : null
+      const resume = lockedRun ?? (sameCityRun && (!fresh || sameCityRun.livesRemaining < 3) ? sameCityRun : null)
       const g = new Game(target, prof.stats.deaths, 0, { skinId: prof.skin, profile: prof, resume })
       mountGame(g)
       // the greet is a one time thing: from here on the menu says welcome back
@@ -329,6 +334,22 @@ export default function App() {
     },
     [mountGame],
   )
+
+  // A dev-only, unsaved entry point for testing later city difficulty without
+  // editing the runner's profile or unlocking cities in their real save.
+  const launchDevTestCity = useCallback((city: number) => {
+    if (!import.meta.env.DEV) return
+    const target = Math.max(1, Math.min(100, Math.round(city)))
+    const g = new Game(target, 0, 0, { skinId: profileRef.current?.skin ?? boot?.skin, profile: null })
+    mountGame(g)
+    setScreen('game')
+  }, [boot?.skin, mountGame])
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    const value = new URLSearchParams(window.location.search).get('testCity')
+    if (value && /^\d+$/.test(value)) launchDevTestCity(Number(value))
+  }, [launchDevTestCity])
 
   /**
    * Play. A player who has never seen the tour gets it first, once, before their
@@ -411,17 +432,26 @@ export default function App() {
         <>
           <HUD snap={snap} />
           <TouchControls game={g} snap={snap} />
-          <Menus snap={snap} gameRef={gameRef} onNew={() => launch(1, true)} />
+          <Menus snap={snap} gameRef={gameRef} onNew={() => launch(1, true)} onHome={backToMenu} />
           <div className="top-chips">
-            <button className="exit-chip" onClick={backToMenu} title="Save and return to menu">
-              ⌂ menu
+            <button className="exit-chip" onClick={backToMenu} title="Save and return to menu" aria-label="Save and return to menu">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8" />
+                <path d="M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+              </svg>
             </button>
             <button
               className="camera-chip"
-              onClick={() => setCamera(g.cameraMode === 'walk' ? 'top' : 'walk')}
+              onClick={(event) => {
+                setCamera(g.cameraMode === 'walk' ? 'top' : 'walk')
+                // A mouse click leaves buttons focused, so the next Enter in
+                // the game used to activate this toggle a second time.
+                if (event.detail > 0) event.currentTarget.blur()
+              }}
               title="Switch between the map view and the street camera"
+              aria-label="Switch between the map view and the street camera"
             >
-              {g.cameraMode === 'walk' ? '3D street' : '2D map'}
+              {g.cameraMode === 'walk' ? '3D' : '2D'}
             </button>
           </div>
         </>

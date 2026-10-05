@@ -8,7 +8,7 @@ import {
   regionIndexForCity,
 } from './city'
 import { DEFAULT_SKIN_ID } from './brand'
-import { cleanLook, saveProfile, type CameraMode, type LookMode, type Profile, type RunState } from './profile'
+import { cleanLook, MAX_LIVES, recoverRunLives, saveProfile, type CameraMode, type LookMode, type Profile, type RunState } from './profile'
 import { recordCityTime, recordRun } from './records'
 import { RNG } from './rng'
 import { sfx } from './sound'
@@ -28,6 +28,7 @@ export interface Snapshot {
     | 'puzzle'
     | 'caught'
     | 'collapsed'
+    | 'cooldown'
     | 'cityCleared'
     | 'victory'
   city: number
@@ -91,6 +92,9 @@ export interface Snapshot {
    * the first two clues of a chain — after that the riddles are all you get.
    */
   clueTrack: { angle: number; distanceTiles: number } | null
+  livesRemaining: number
+  bankedLives: number
+  cooldownRemainingMs: number
 }
 
 export interface GameOptions {
@@ -224,6 +228,9 @@ export class Game {
   /** cities finished since this engine was created (a full run needs 100) */
   private clearedThisSession = 0
   caughtTimer = 0
+  livesRemaining = 3
+  bankedLives = 0
+  private cooldownUntil = 0
   deathReason = ''
   /** 1 -> 0 after a guard lands a shot; the renderer paints a red flash with it */
   hitFlash = 0
@@ -281,6 +288,16 @@ export class Game {
     this.cameraMode = this.profile?.settings.camera === 'walk' ? 'walk' : 'top'
     this.lookMode = this.profile ? cleanLook(this.profile.settings.look) : 'drag'
     this.player = this.makePlayer(opts.resume ?? null)
+    if (opts.resume?.city === this.world.city) {
+      this.bankedLives = Math.max(0, Math.floor(opts.resume.bankedLives ?? 0))
+      const recovered = recoverRunLives(opts.resume)
+      this.livesRemaining = recovered.livesRemaining
+      this.cooldownUntil = recovered.cooldownUntil
+      if (this.livesRemaining === 0) {
+        if (this.cooldownUntil <= 0) this.cooldownUntil = Date.now() + this.world.city * 60_000
+        this.status = 'cooldown'
+      } else if (this.player.health <= 0) this.restartCity()
+    }
     this.camYaw = this.player.facing
     if (this.profile) {
       this.profile.stats.attempts++
@@ -420,6 +437,27 @@ export class Game {
     for (const fn of this.listeners) fn()
   }
 
+  private consumeLife() {
+    this.livesRemaining = Math.max(0, this.livesRemaining - 1)
+    if (this.livesRemaining < MAX_LIVES && this.cooldownUntil <= 0) {
+      this.cooldownUntil = Date.now() + this.world.city * 60_000
+    }
+  }
+
+  /** Regen is wall-clock based, so its timer keeps moving in play and menus. */
+  private updateLifeRecovery() {
+    if (this.livesRemaining >= MAX_LIVES || this.cooldownUntil <= 0) return
+    const recovered = recoverRunLives(
+      { city: this.world.city, livesRemaining: this.livesRemaining, cooldownUntil: this.cooldownUntil },
+      Date.now(),
+    )
+    if (recovered.livesRemaining === this.livesRemaining && recovered.cooldownUntil === this.cooldownUntil) return
+    this.livesRemaining = recovered.livesRemaining
+    this.cooldownUntil = recovered.cooldownUntil
+    if (this.status === 'cooldown' && this.livesRemaining > 0) this.restartCity()
+    else this.checkpoint()
+  }
+
   // ---- input ------------------------------------------------------------
 
   setKey(code: string, down: boolean) {
@@ -494,6 +532,11 @@ export class Game {
     const box = this.dialog !== null || this.activePuzzle !== null
     if (box && !this.boxOpen) sfx.play('open')
     this.boxOpen = box
+    this.updateLifeRecovery()
+    if (this.status === 'cooldown') {
+      this.emitThrottled()
+      return
+    }
     const playing =
       this.status === 'playing' || this.status === 'caught' || this.status === 'cityCleared' || this.status === 'collapsed'
     if (!playing) {
@@ -503,13 +546,23 @@ export class Game {
 
     if (this.status === 'caught') {
       this.caughtTimer -= dt
-      if (this.caughtTimer <= 0) this.restartDay()
+      if (this.caughtTimer <= 0) {
+        if (this.livesRemaining === 0) {
+          this.status = 'cooldown'
+          this.checkpoint()
+        } else this.restartDay()
+      }
       this.emitThrottled()
       return
     }
     if (this.status === 'collapsed') {
       this.caughtTimer -= dt
-      if (this.caughtTimer <= 0) this.restartCity()
+      if (this.caughtTimer <= 0) {
+        if (this.livesRemaining === 0) {
+          this.status = 'cooldown'
+          this.checkpoint()
+        } else this.restartCity()
+      }
       this.emitThrottled()
       return
     }
@@ -663,6 +716,11 @@ export class Game {
     const mult = p.running ? 1.5 : 1
     p.hunger = Math.max(0, p.hunger - this.world.drainPerHour.hunger * hoursPerSec * dt * mult)
     p.thirst = Math.max(0, p.thirst - this.world.drainPerHour.thirst * hoursPerSec * dt * mult)
+    // Health starts slipping as needs fall, then accelerates with deprivation.
+    // Keep the sharper starvation/dehydration damage at zero as the final warning.
+    const hungerDeficit = 1 - p.hunger / 100
+    const thirstDeficit = 1 - p.thirst / 100
+    p.health = Math.max(0, p.health - dt * (0.65 * hungerDeficit + thirstDeficit) * mult)
     if (p.hunger <= 0) p.health = Math.max(0, p.health - dt * 2.2)
     if (p.thirst <= 0) p.health = Math.max(0, p.health - dt * 3.2)
     if (p.health <= 0) {
@@ -673,10 +731,12 @@ export class Game {
             ? 'You starved.'
             : 'A guard shot you down in the street.'
       this.status = 'collapsed'
+      this.consumeLife()
       this.caughtTimer = 2.2
       this.deaths++
       if (this.profile) this.profile.stats.deaths++
       this.saveMeta()
+      this.checkpoint()
       return
     }
 
@@ -840,20 +900,24 @@ export class Game {
       if (gd.attackCd > 0) gd.attackCd = Math.max(0, gd.attackCd - dt)
       if (gd.abilityCd > 0) gd.abilityCd = Math.max(0, gd.abilityCd - dt)
       if (gd.burstTimer > 0) gd.burstTimer = Math.max(0, gd.burstTimer - dt)
-      if (gd.role === 'gun' && gd.alert > 0.4 && visible && gd.attackCd <= 0 && dist > 2.2 * TS) {
-        gd.attackCd = Math.max(0.8, 1.95 - gd.tier * 0.12 - this.world.city * 0.004)
-        gd.flash = 0.18
+      const rangedGuard = gd.role === 'gun' || gd.role === 'laser'
+      if (rangedGuard && gd.alert > 0.4 && visible && gd.attackCd <= 0 && dist > 2.2 * TS) {
+        gd.attackCd = gd.role === 'laser'
+          ? Math.max(1.25, 2.2 - gd.tier * 0.12 - this.world.city * 0.005)
+          : Math.max(0.8, 1.95 - gd.tier * 0.12 - this.world.city * 0.004)
+        gd.flash = gd.role === 'laser' ? 0.34 : 0.18
         gd.shotAt = { x: p.x, y: p.y }
         sfx.play('gunshot')
-        // A round is a bullet, not a bee sting: from a full bar three hits are
-        // always enough to put the runner down, and deeper cities drop that to
-        // two. It is capped at 50 so no single shot can ever be a one hit kill.
-        const dmg = Math.min(50, Math.max(34, 34 + gd.tier * 3 + Math.floor(this.world.city / 12) * 4 + (gd.captain ? 6 : 0)))
+        // Gun rounds are capped at 50; heavy laser captains can hit harder,
+        // making a beam potentially fatal when survival health is already low.
+        const dmg = gd.role === 'laser'
+          ? Math.min(72, 48 + gd.tier * 4 + Math.floor(this.world.city / 30) * 3 + (gd.captain ? 8 : 0))
+          : Math.min(50, Math.max(34, 34 + gd.tier * 3 + Math.floor(this.world.city / 12) * 4 + (gd.captain ? 6 : 0)))
         p.health = Math.max(0, p.health - dmg)
         this.hitFlash = 1
         if (this.shotToastCd <= 0) {
           this.shotToastCd = 3.5
-          this.toast(`The ${guardRankName(gd)} is shooting at you! Find cover.`, 'bad')
+          this.toast(gd.role === 'laser' ? 'LASER LOCK! Break its line of sight!' : `The ${guardRankName(gd)} is shooting at you! Find cover.`, 'bad')
         }
       }
 
@@ -876,7 +940,7 @@ export class Game {
           const dx = tx - gd.x
           const dy = ty - gd.y
           // a shooter holds its ground in the open and fires instead of closing
-          const holding = gd.role === 'gun' && visible && dist < gd.visionDist * 0.92
+          const holding = rangedGuard && visible && dist < gd.visionDist * 0.92
           if (!holding) {
             if (!this.moveGuardToward(gd, tx, ty, spd * dt)) {
               gd.stuckTimer += dt
@@ -1168,6 +1232,9 @@ export class Game {
   private caught(gd: Guard) {
     this.status = 'caught'
     this.caughtTimer = 2.4
+    this.consumeLife()
+    this.deaths++
+    if (this.profile) this.profile.stats.deaths++
     gd.alert = 0
     gd.state = 'search'
     gd.searchTimer = 3
@@ -1184,6 +1251,7 @@ export class Game {
         : `The ${rank} caught you${lostFood ? ' and took your food' : ''}. Back to the checkpoint.`,
       'bad',
     )
+    this.checkpoint()
   }
 
   // ---- interactions -----------------------------------------------------
@@ -1195,6 +1263,8 @@ export class Game {
       return null
     }
     switch (p.kind) {
+      case 'crate':
+        return p.data === 'life' ? 'Life crate (E)' : 'Climb crate (Space)'
       case 'fountain':
         return 'Drink (E) from the fountain'
       case 'shop':
@@ -1226,6 +1296,15 @@ export class Game {
     }
     if (!prop) return
     switch (prop.kind) {
+      case 'crate':
+        if (prop.data === 'life') {
+          prop.used = true
+          this.bankedLives++
+          this.toast(`Life stored. ${this.bankedLives} reserve ${this.bankedLives === 1 ? 'life' : 'lives'}.`, 'good')
+          sfx.play('coin')
+          this.checkpoint()
+        }
+        break
       case 'fountain':
         p.thirst = 100
         this.toast('You drank deeply. Thirst quenched.', 'good')
@@ -1569,6 +1648,9 @@ export class Game {
       food: pl.food,
       water: pl.water,
       clueIndex: pl.clueIndex,
+      livesRemaining: this.livesRemaining,
+      bankedLives: this.bankedLives,
+      cooldownUntil: this.cooldownUntil,
     }
     prof.bestCity = Math.max(prof.bestCity, this.world.city)
     prof.skin = this.skinId
@@ -1640,6 +1722,19 @@ export class Game {
     this.checkpoint()
   }
 
+  /** Spend saved crate lives after the city's starting lives are exhausted. */
+  useReserveLives(count: number) {
+    if (this.status !== 'cooldown' || this.bankedLives <= 0) return
+    const spent = Math.max(1, Math.min(3, Math.floor(count), this.bankedLives))
+    this.bankedLives -= spent
+    this.livesRemaining = spent
+    this.status = 'playing'
+    this.restartCity()
+    this.toast(`Used ${spent} reserve ${spent === 1 ? 'life' : 'lives'}.`, 'good')
+    this.checkpoint()
+    this.emit()
+  }
+
   nextCity() {
     const cleared = this.world.city
     const next = cleared + 1
@@ -1672,6 +1767,8 @@ export class Game {
       health: this.player.health,
     }
     this.world = generateCity(next)
+    this.livesRemaining = 3
+    this.cooldownUntil = 0
     this.player = this.makePlayer()
     this.player.coins = carry.coins
     this.player.food = carry.food
@@ -1776,6 +1873,9 @@ export class Game {
       puzzleNudge: this.activePuzzle?.nudge ?? null,
       playerName: this.profile?.name ?? 'Runner',
       clueTrack: this.clueTrack(),
+      livesRemaining: this.livesRemaining,
+      bankedLives: this.bankedLives,
+      cooldownRemainingMs: Math.max(0, this.cooldownUntil - Date.now()),
       cityTimeSec: this.cityTimeSec,
       runTimeSec: this.runTimeSec,
     }
