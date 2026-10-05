@@ -1768,8 +1768,6 @@ export class Game {
       health: this.player.health,
     }
     this.world = generateCity(next)
-    this.livesRemaining = 3
-    this.cooldownUntil = 0
     this.player = this.makePlayer()
     this.player.coins = carry.coins
     this.player.food = carry.food
