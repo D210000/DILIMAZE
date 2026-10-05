@@ -576,7 +576,7 @@ export class Game {
     const step = 1 / 120
     this.acc += dt
     let guard = 0
-    while (this.acc >= step && guard < 30) {
+    while (this.acc >= step && guard < 30 && this.status === 'playing') {
       this.simulate(step)
       this.acc -= step
       guard++
@@ -1230,6 +1230,7 @@ export class Game {
   }
 
   private caught(gd: Guard) {
+    if (this.status !== 'playing') return
     this.status = 'caught'
     this.caughtTimer = 2.4
     this.consumeLife()
